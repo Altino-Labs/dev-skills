@@ -197,6 +197,12 @@ Only delete an old version from `~/.claude/plugins/cache/dev-skills/<plugin>/`
 once no entry points to it anymore. Open sessions only pick up the new version
 after a restart.
 
+After `claude plugin install` / `update` / `uninstall` with `--scope project`, check the diff of
+the project's `.claude/settings.json` before committing it: the CLI rewrites that file and can
+update only the entry it touched — leaving other plugins or the marketplace declaration on an
+old name or address — and reorder its keys. Fix any stale `enabledPlugins` /
+`extraKnownMarketplaces` entries by hand.
+
 ## Hooks
 
 Active in every project with the plugin enabled. The scripts read the event as JSON from
