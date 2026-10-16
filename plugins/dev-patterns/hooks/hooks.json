@@ -1,0 +1,16 @@
+{
+  "description": "Lint TypeScript files with the project's ESLint after Write/Edit.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-linter.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}
