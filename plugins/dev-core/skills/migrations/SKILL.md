@@ -54,6 +54,15 @@ Pick one stance per project and record it. In production, prefer **roll forward*
 down-migration is rarely exercised and often destroys data. Every migration still documents
 its inverse — as code or as a comment — so a reviewer can see what undoing it would take.
 
+When the inverse cannot run without losing data (a dropped column or table, a lossy type
+change, a destructive backfill), say so explicitly at the top of the migration instead of
+leaving the `down` blank:
+
+```sql
+-- down: NOT REVERSIBLE (data loss) — drops column orders.legacy_notes and its data.
+--       To undo: restore the column from a backup taken before this migration.
+```
+
 ## SQL-first vs model-first tools
 
 - **SQL-first** (Flyway, Liquibase, golang-migrate, dbmate, Supabase CLI, plain `.sql`

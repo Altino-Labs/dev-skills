@@ -30,11 +30,14 @@ pnpm test --coverage   # with coverage report
 
 ## Runner by stack — check before writing a test
 
-| Workspace | Runner | Mocks |
-|---|---|---|
-| NestJS 11 / CommonJS packages | Jest + ts-jest | `createMock` from `@golevelup/ts-jest`, `jest.Mocked<T>` |
-| NestJS 12 / ESM packages (`"type": "module"`) | **Vitest** (`vitest run`) | `createMock` from `@golevelup/ts-vitest` (exists on npm, not yet exercised in a project), `Mocked<T>` from `vitest` |
-| Expo app | `jest-expo` (version picked by `npx expo install jest`) | `@testing-library/react-native` |
+Keyed by **module system + runner** — the NestJS major alone does not decide the runner.
+
+| Module system | Runner | Typical workspace | Mocks / notes |
+|---|---|---|---|
+| CommonJS | Jest + ts-jest | NestJS 11; packages without `"type": "module"` | `createMock` from `@golevelup/ts-jest`, `jest.Mocked<T>` |
+| CommonJS | Jest 30 + ts-jest | NestJS 12 kept on CommonJS | Node ≥ 24.9 and Jest run with `--experimental-vm-modules` (e.g. `NODE_OPTIONS=--experimental-vm-modules jest`); same mocks as above |
+| ESM (`"type": "module"`) | **Vitest** (`vitest run`) | NestJS 12 on ESM; ESM packages | `createMock` from `@golevelup/ts-vitest` (exists on npm, not yet exercised in a project), `Mocked<T>` from `vitest` |
+| Expo / Metro (Babel) | `jest-expo` (version picked by `npx expo install jest`) | Expo app | `@testing-library/react-native` |
 
 **How to check:** look at the workspace's `package.json` — `"type": "module"` and a `vitest`
 devDependency / `"test": "vitest run"` mean Vitest; `jest` + `ts-jest` (or a `jest` key /

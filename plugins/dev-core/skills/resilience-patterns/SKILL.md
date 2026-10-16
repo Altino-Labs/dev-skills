@@ -58,11 +58,25 @@ await sendPushBreaker.fire(payload);
 
 For calls to external services that can fail temporarily.
 
+**Retry only idempotent operations — or send an idempotency key.** A timeout does not mean the
+call failed: the provider may have sent the email or written the row before the response was
+lost, and a retry then duplicates it. Retry a non-idempotent call only when the provider
+deduplicates by an idempotency key you send (the same key on every attempt). Never retry
+non-idempotent database writes blindly, and don't retry database writes in the request path at
+all — fail fast and let the client (or a background job) retry the whole operation. Retry only
+errors that can succeed on a second try (timeouts, connection resets, 429, 5xx) — never
+validation errors, 4xx or business-rule violations: that is what `isRetryable` is for.
+
 ```typescript
 // infrastructure/resilience/retry.ts
 export async function withRetry<T>(
   fn: () => Promise<T>,
-  options: { maxAttempts: number; baseDelayMs: number; label?: string },
+  options: {
+    maxAttempts: number;
+    baseDelayMs: number;
+    label?: string;
+    isRetryable?: (error: unknown) => boolean;   // default: retry every error
+  },
 ): Promise<T> {
   let lastError: Error;
 
@@ -72,6 +86,7 @@ export async function withRetry<T>(
     } catch (error) {
       lastError = error as Error;
       if (attempt === options.maxAttempts) break;
+      if (options.isRetryable && !options.isRetryable(error)) break;   // permanent error — stop now
 
       const delay = options.baseDelayMs * Math.pow(2, attempt - 1);
       const jitter = Math.random() * 200;  // avoids thundering herd
@@ -89,12 +104,23 @@ export async function withRetry<T>(
   throw lastError!;
 }
 
-// Usage
+// Usage — the same idempotency key on every attempt, so the provider sends the email once
+const idempotencyKey = `order-confirmed:${orderId}`;
 const result = await withRetry(
-  () => emailService.send(payload),
-  { maxAttempts: 3, baseDelayMs: 500, label: 'email.send' },
+  () => emailService.send(payload, { idempotencyKey }),
+  {
+    maxAttempts: 3,
+    baseDelayMs: 500,
+    label: 'email.send',
+    isRetryable: (e) => isTimeout(e) || isNetworkError(e) || [429, 500, 502, 503, 504].includes(statusOf(e)),
+  },
 );
 ```
+
+**Request-path budget.** The total time of every attempt plus backoff must fit inside the
+request's own timeout (and the client's). `3 attempts × 5s timeout + 5s/10s backoff` is ~30s —
+far past any reasonable request budget. In the request path use one or two short attempts (or
+none); longer retry schedules belong in background jobs.
 
 ---
 
@@ -140,9 +166,9 @@ export const TIMEOUTS_MS = {
 
 | Service | Circuit Breaker | Retry | Timeout | Fallback |
 |---|---|---|---|---|
-| Primary database | No (managed) | Yes (3x, 5s base) | 5s | 503 error |
+| Primary database | No (managed) | Reads / idempotent ops only (2x, 100ms base, within the request budget); never blind retries of writes in the request path | 5s | 503 error |
 | Cache (Redis) | Yes | Yes (2x, 200ms base) | 1s | Operate without cache |
-| Email | Yes | Yes (3x, 2s base) | 10s | Log + retry job |
+| Email | Yes | Yes (3x, 2s base) — with an idempotency key, outside the request path (a retry after a timeout can send twice) | 10s | Log + retry job |
 | Push notification | Yes | Yes (3x, 1s base) | 5s | Log + retry job |
 | Storage (upload) | No | Yes (2x, 1s base) | 30s | Error to user |
 | Error tracking (e.g. Sentry) | No | No | 2s | Silent failure |

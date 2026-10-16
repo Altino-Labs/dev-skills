@@ -57,6 +57,23 @@ it with the architect.
 Events decouple **different modules**. Use cases inside the same module call each other
 directly — see [subscribers.md](subscribers.md), "Events for intra-module communication".
 
+### Orchestrator / composition modules
+
+Some modules exist only to compose others — e.g. an assistant that proposes actions and, once
+the user confirms, executes them across many modules; a back-office command layer; a BFF. Such
+a module is the one deliberate exception to "never call another module's use case", with
+fixed limits:
+
+- **Allowed:** calling the target modules' **published** use cases (a command API each module
+  exports on purpose, next to its public query API) and their public query APIs.
+- **Never:** their repositories, tables, entities or internal (unexported) use cases — the
+  target module's own use case still enforces its invariants and authorization and publishes
+  its own events.
+- **One-way:** the orchestrator owns none of the target modules' state or business rules, and
+  no target module depends back on it.
+- Record each orchestrator module and the use cases it is allowed to call in the project's
+  architecture doc, so it doesn't become a back door into every module.
+
 ---
 
 ## Domain event structure

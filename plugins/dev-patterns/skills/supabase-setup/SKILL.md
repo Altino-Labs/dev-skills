@@ -37,14 +37,23 @@ Create **one Supabase project per environment** — never share between staging 
 
 ---
 
-## Connection pooling — always use port 6543
+## Connection pooling — which connection for which job
+
+| Job | Connection |
+|---|---|
+| App runtime with a direct Postgres client (`pg`, an ORM) in containers / serverless | **Transaction pooler, port 6543** |
+| Migrations, `supabase db push`, schema dumps, anything with DDL, prepared statements, `LISTEN`/`NOTIFY` or session state | **Direct connection (5432)** or the **session pooler** |
+| App that only talks to Supabase through `supabase-js` (HTTP / PostgREST) | **None** — no `DATABASE_URL` needed |
 
 ```bash
-# ✅ Correct — connection pooler (pgbouncer)
-DATABASE_URL=postgresql://user:pass@db.supabase.co:6543/postgres?pgbouncer=true
+# ✅ App runtime — transaction pooler (copy the exact string from the dashboard's Connect panel)
+DATABASE_URL=postgresql://<user>:<pass>@<pooler-host>:6543/postgres?pgbouncer=true
 
-# ❌ Wrong — direct connection (exhausts connections in containers)
-DATABASE_URL=postgresql://user:pass@db.supabase.co:5432/postgres
+# ✅ Migrations / db push — direct connection (or the session pooler)
+MIGRATION_DATABASE_URL=postgresql://<user>:<pass>@db.<project-ref>.supabase.co:5432/postgres
+
+# ❌ Wrong — direct connection as the runtime pool of many containers (exhausts connections)
+# ❌ Wrong — running migrations through the transaction pooler (breaks prepared statements / DDL)
 ```
 
 ---
@@ -109,8 +118,9 @@ CREATE POLICY "user_isolation" ON <table>
 
 ### Multi-tenant RLS — required pattern with SECURITY DEFINER
 
-**WARNING:** Policies that make a subquery on the members table cause infinite recursion.
-Always use `SECURITY DEFINER` functions to break the cycle. See the `migrations` skill for the complete pattern.
+**WARNING:** A policy **on the members table** that subqueries the members table recurses
+infinitely. Use `SECURITY DEFINER` helpers to break the cycle — and for role/type predicates
+too. See the `migrations` skill for the complete pattern.
 
 ```sql
 -- Step 1: create helper function BEFORE the policies
@@ -122,14 +132,23 @@ AS $$
   WHERE user_id = user_uuid AND accepted_at IS NOT NULL
 $$;
 
--- Step 2: use the function in the policies
-CREATE POLICY "tenant_member_access" ON <data_table>
-  FOR ALL USING (tenant_id IN (SELECT public.get_tenant_ids_for_user(auth.uid())));
+-- Step 2: use the function in the policies — members READ; the API (service_role) writes
+CREATE POLICY "tenant_member_read" ON <data_table>
+  FOR SELECT TO authenticated
+  USING (tenant_id IN (SELECT public.get_tenant_ids_for_user(auth.uid())));
+
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON <data_table> FROM anon, authenticated;
 
 -- Service role bypasses RLS for administrative operations
 CREATE POLICY "service_role_access" ON <data_table>
   FOR ALL TO service_role USING (true);
 ```
+
+A `FOR ALL` member policy would let every member insert/update/delete through PostgREST,
+bypassing the API's role matrix. Add write policies only when clients must write directly, and
+only mirroring the role matrix (role predicates through a `SECURITY DEFINER` helper). Check
+`authenticated`'s table privileges in CI — query in the `migrations` skill ("Required base
+policies").
 
 ### Lock down grants on SECURITY DEFINER functions that take raw parameters
 
@@ -146,6 +165,25 @@ REVOKE ALL ON FUNCTION public.<fn>(<args>) FROM PUBLIC, anon, authenticated;
 ```
 
 Typical incident this pattern catches: generic pgcrypto `encrypt`/`decrypt` wrappers (no auth check) left callable by `anon` for months. **This is not a one-off** — in practice the same bug recurs across many function kinds before anyone notices, and it tends to be caught by manual audit, not tooling: membership-check helpers (`is_member_of_<tenant>(p_tenant_id, p_user_id)`), "ids for user" helpers that take a `user_uuid` parameter, and stock/counter mutators (`increment_<x>_stock`/`decrement_<x>_stock`). The worst variant has **no explicit grant line at all** — it is exposed purely by the schema-wide default, which makes it easy to miss in review since there's no `GRANT ... TO anon` line to spot.
+
+**Structural fix — change the default, then verify in CI.** Instead of remembering a `REVOKE`
+per function, flip the default once in a migration, so new functions start closed and each
+exposure becomes an explicit, reviewable `GRANT`:
+
+```sql
+-- Run as the role that creates your functions/tables (normally postgres, i.e. migrations)
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  REVOKE EXECUTE ON FUNCTIONS FROM anon, authenticated, PUBLIC;
+
+-- Then grant deliberately, e.g. a helper referenced by RLS policies:
+GRANT EXECUTE ON FUNCTION public.get_tenant_ids_for_user(uuid) TO authenticated;
+```
+
+`ALTER DEFAULT PRIVILEGES` only affects objects created **afterwards** — revoke on the existing
+functions once as well. Then make the audit query below (and the table-privilege query in the
+`migrations` skill) a **CI check** against a database migrated from scratch: the job fails when
+`anon` / `PUBLIC` holds `EXECUTE` on a function, or `authenticated` holds a table privilege,
+that is not in a committed allowlist.
 
 **Checklist for every new SECURITY DEFINER function, before merging the migration:**
 1. Does it take a caller-supplied id (`p_user_id`, `p_tenant_id`, `p_item_id`, ...) with no internal check that it matches `auth.uid()` or is reachable through the caller's own membership? If yes, it's a candidate for direct-RPC abuse — either add the internal check (e.g. an `is_member_of_<tenant>` helper that compares against `auth.uid()` internally) or revoke `anon`/`authenticated`/`PUBLIC` entirely if the API only ever calls it via `service_role`.
@@ -218,16 +256,29 @@ no useful error, making it look like the token is invalid when it is not).
 
 The correct guard implements `CanActivate` directly:
 
+The single source for this guard (error codes, module registration, `@Public()`) is
+`dev-patterns:auth-security` → backend-auth. Minimal shape:
+
 ```typescript
-// ✅ Correct — algorithm-agnostic, works with ES256
+// ✅ Correct — algorithm-agnostic (works with ES256), honours @Public(), checks the scheme
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(
+    private readonly supabase: SupabaseService,
+    private readonly reflector: Reflector,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    // Registered as a global guard: public routes (login, register, health) must pass through
+    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+      context.getHandler(), context.getClass(),
+    ]);
+    if (isPublic) return true;
+
     const request = context.switchToHttp().getRequest();
-    const token = request.headers['authorization']?.slice(7);
-    if (!token) throw new UnauthorizedException('Missing token');
+    const authHeader: string | undefined = request.headers['authorization'];
+    if (!authHeader?.startsWith('Bearer ')) throw new UnauthorizedException('Missing token');
+    const token = authHeader.slice(7);
 
     const { data, error } = await this.supabase.client.auth.getUser(token);
     if (error || !data?.user) throw new UnauthorizedException('Invalid or expired token');
@@ -408,17 +459,24 @@ restart the API process — env vars are only read at startup, not hot-reloaded 
 
 ## Backups
 
-| Plan | Type | Retention |
-|---|---|---|
-| Free | Automatic daily | 7 days |
-| Pro | PITR (point-in-time recovery) | 7 days |
-
-**When activating the Pro plan:** enable PITR immediately — it is the most important protection.
+Which backups you get depends on the plan, and plans change — **check the current Supabase
+pricing and backups docs** before relying on any of this, and record what the project actually
+has in its infrastructure doc:
+- Whether automatic daily backups are included, and their retention, depend on the plan.
+- **Point-in-time recovery (PITR) is a paid add-on**, not something a plan turns on by itself.
+  For production data you cannot afford to lose a day of, budget for it and enable it.
+- Independently of the plan, keep your own periodic logical dump (`supabase db dump` /
+  `pg_dump`, through the direct connection) in storage you control.
 
 **Restore procedure:**
-1. Supabase Dashboard → Backups → select point
-2. Restore to staging first to validate
+1. Supabase Dashboard → Backups → select the backup / point in time
+2. Restore to staging (or a scratch project) first to validate
 3. Restore to production with a maintenance window
+
+**Restore drill:** a backup nobody has restored is a hope, not a backup. On a schedule (e.g.
+quarterly) and after any change to the backup setup, restore the latest backup into a scratch
+project, run a smoke check (row counts on key tables, a login, a read through the API), time
+it, and record the date and duration.
 
 ---
 
@@ -440,12 +498,15 @@ FROM my_table WHERE id = $1;
 
 ```bash
 # Backend
-DATABASE_URL=                        # port 6543 with pgbouncer=true
+DATABASE_URL=                        # only with a direct Postgres client — transaction pooler, port 6543
+MIGRATION_DATABASE_URL=              # CI / migrations only — direct (5432) or session pooler
 SUPABASE_URL=                        # https://<ref>.supabase.co
 SUPABASE_ANON_KEY=                   # anon client (stateless, persistSession: false)
 SUPABASE_SERVICE_ROLE_KEY=           # service_role key (never expose on frontend)
 SUPABASE_JWT_SECRET=                 # only if you verify HS256 tokens locally — prefer auth.getUser() (see ES256 note)
-DATA_ENCRYPTION_KEY=                 # pgcrypto key for bytea columns, if any (name it per project)
+<DOMAIN>_ENCRYPTION_KEY=             # pgcrypto key for bytea columns, if any — one key per data domain
+                                     # (e.g. BILLING_ENCRYPTION_KEY, DOCUMENTS_ENCRYPTION_KEY), so one
+                                     # compromise or rotation doesn't touch every encrypted column
 
 # Frontend (public — no sensitive data)
 NEXT_PUBLIC_SUPABASE_URL=
@@ -462,7 +523,7 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=
 Database:  500MB
 Auth:      50,000 active users/month
 Storage:   1GB
-Backups:   7 days (daily)
+Backups:   depends on the plan — check the current pricing page (see "Backups")
 ```
 
 **Trigger for Pro ($25/month):** database > 400MB or > 50k auth users.

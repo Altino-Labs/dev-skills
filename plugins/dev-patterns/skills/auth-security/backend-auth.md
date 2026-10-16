@@ -91,7 +91,7 @@ Typical public endpoints (list the project's real ones in its own docs):
 - `POST /api/v1/auth/login`
 - `POST /api/v1/auth/refresh`
 - `GET  /api/v1/invitations/:token` — lookup by an emailed, unguessable token
-- health checks (`/health/live`, `/health/ready`)
+- health checks (`/api/v1/health/live`, `/api/v1/health/ready` with the global prefix)
 
 Anything that acts *as* a user (e.g. accepting an invitation into the caller's account)
 is **not** public, even if it is reached through an emailed token link — it needs
@@ -186,7 +186,7 @@ async execute(refreshToken: string): Promise<RefreshOutput> {
 }
 ```
 
-Refresh tokens are **opaque** (UUID v4), stored in the `refresh_tokens` table **as a hash** (`token_hash`, unique index) with `expiresAt` and `revokedAt`. Native clients get the token in the response body; web clients only as an `httpOnly`, `Secure`, `SameSite` cookie set by the server (`dev-core:auth-security`). Never store refresh tokens in localStorage.
+Refresh tokens are **opaque** (32 random bytes — `randomBytes(32).toString('base64url')` from `node:crypto`; a UUID v4 has only 122 random bits), stored in the `refresh_tokens` table **as a hash** (`token_hash`, unique index) with `expiresAt` and `revokedAt`. Native clients get the token in the response body; web clients only as an `httpOnly`, `Secure`, `SameSite` cookie set by the server (`dev-core:auth-security`). Never store refresh tokens in localStorage.
 
 ---
 

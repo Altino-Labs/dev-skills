@@ -228,8 +228,11 @@ throw new EntityNotFoundException('Order', id);   // domain exception — dev-pa
 throw new HttpException('Not found', 404);
 ```
 
-In this stack the exception classes (with their `code` and `statusCode`) and the global
-exception filter that maps them to HTTP live in `dev-patterns:error-handling`.
+In this stack the exception classes and the global exception filter that maps them to HTTP live
+in `dev-patterns:error-handling`. The classes mirror the dev-core hierarchy and add a
+`statusCode` — **only in these mirror classes**, as the filter's mapping table. Code that
+throws uses the dev-core constructors (no status argument) and never reads `statusCode`, so
+`dev-core:clean-architecture`'s "no transport concepts in domain code" still holds.
 
 ## Naming (NestJS + Supabase)
 

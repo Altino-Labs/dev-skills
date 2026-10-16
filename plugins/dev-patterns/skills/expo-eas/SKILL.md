@@ -34,7 +34,7 @@ anything here. Gotchas that apply to any project:
 ## Initial setup
 
 ```bash
-npm install -g eas-cli
+npm install -g eas-cli@<x.y.z>   # a recent eas-cli, pinned — the same version CI installs
 eas login
 eas build:configure   # generates initial eas.json
 ```
@@ -45,7 +45,7 @@ eas build:configure   # generates initial eas.json
 
 ```json
 {
-  "cli": { "version": ">= 7.0.0" },
+  "cli": { "version": ">= X.Y.Z" },
   "build": {
     "development": {
       "developmentClient": true,
@@ -72,6 +72,10 @@ eas build:configure   # generates initial eas.json
   }
 }
 ```
+
+`cli.version`: set the floor to the recent eas-cli version the team and CI actually use (CI
+installs that exact version, pinned) and raise it deliberately — a years-old floor lets any
+outdated local CLI build the app.
 
 ---
 
@@ -156,6 +160,15 @@ stop reaching installed builds until a rebuild. Don't edit `eas.json` while test
 batch it with the next planned native build. Note that a profile with `"distribution": "internal"`
 already makes EAS build an installable Android **APK**; `android.buildType: "apk"` is redundant there.
 
+**Pitfall — any lockfile rewrite can move the runtime.** The fingerprint hashes the native
+modules as they are actually resolved (autolinking, their versions, config plugins), not just
+the app's `package.json`. A lockfile-only change — `pnpm update`/`dedupe`, a Dependabot bump of
+an unrelated package, reinstalling with a different pnpm version — can resolve a native module
+or config plugin to another version and change the runtime version with no visible
+`package.json` diff, holding back every OTA until a new build. Treat every lockfile change in a
+PR as potentially native: compare `runtimeversion:resolve` before and after, and batch lockfile
+rewrites with the next planned native build when testers depend on OTAs.
+
 **Verify before relying on it** — the value must be identical across runs and
 across the environments that build (EAS) and publish (CI):
 
@@ -175,24 +188,28 @@ module" locally while CI/EAS (clean installs) work — reinstall from scratch.
 
 ---
 
-## EAS Secrets
+## EAS environment variables
 
-Secrets are stored in EAS, never in committed files:
+Secrets are stored in EAS, never in committed files. The `eas secret:*` commands are
+superseded by **`eas env:*`**: variables belong to an EAS environment (`development`,
+`preview`, `production`) and have a visibility (`plaintext`, `sensitive`, `secret`). A build
+profile picks its environment with `"environment": "<name>"` in `eas.json`.
 
 ```bash
-# Create project secret
-eas secret:create \
-  --scope project \
-  --name SECRET_NAME \
-  --value "value" \
-  --type string
+# Create a variable in an environment (secret = never readable back, not printed in logs)
+eas env:create --name SECRET_NAME --value "value" --environment production --visibility secret
 
-# List secrets
-eas secret:list
+# List variables of an environment
+eas env:list --environment production
 
-# Delete secret
-eas secret:delete --id <id>
+# Pull non-secret values into a local .env for development
+eas env:pull --environment development
+
+# Delete a variable
+eas env:delete --name SECRET_NAME --environment production
 ```
+
+Run `eas env:create --help` on the pinned CLI version — flags evolve between releases.
 
 Access in `app.config.ts`:
 
@@ -243,7 +260,7 @@ export default {
 ```yaml
 - name: Build and submit (production)
   run: |
-    npm install -g eas-cli
+    npm install -g eas-cli@<x.y.z>   # pinned — an unpinned install hands EXPO_TOKEN to whatever was published last
     eas build --platform all --profile production --non-interactive
     eas submit --platform all --profile production --non-interactive
   env:

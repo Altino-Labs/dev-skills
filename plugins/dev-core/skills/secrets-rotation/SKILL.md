@@ -18,7 +18,7 @@ The examples name one possible stack; use your project's equivalents.
 |---|---|
 | Backend variables | The deploy platform's environment variables / secret manager (e.g. Railway → Environment Variables, AWS Secrets Manager, Kubernetes Secrets) |
 | CI/CD variables | The CI's secret store (e.g. GitHub → Secrets) |
-| Sensitive mobile variables | The mobile build service's secrets (e.g. EAS Secrets) |
+| Sensitive mobile variables | The mobile build service's secrets (e.g. EAS environment variables with `secret` visibility) |
 | Web (server-side) variables | The web host's environment variables (e.g. Vercel → Environment Variables) |
 | Initial bootstrap | A local, gitignored file (e.g. `.bootstrap-secrets` — never commit) |
 
@@ -87,10 +87,24 @@ If a secret was committed, sent in a message, or appeared in a log:
 |---|---|
 | JWT_SECRET | 90 days |
 | TOKEN_HASH_PEPPER (optional key for hashing refresh tokens) | Only if compromised — rotating it invalidates every stored refresh token (all users log in again) unless the server verifies with both the old and the new pepper during a transition window (dual hash) |
-| External service API keys | 90 days |
-| CI/CD and deploy-platform tokens (e.g. Railway, GitHub) | 180 days |
+| External service API keys (e.g. a Resend API key; a Supabase service-role / secret API key) | 90 days |
+| CI/CD and deploy-platform tokens (e.g. Railway, GitHub, Vercel, an Expo/EAS access token, a Supabase CLI access token used by CI) | 180 days |
 | Data encryption keys (e.g. pgcrypto) | Only if compromised |
-| Database passwords | Only if compromised |
+| Database passwords (e.g. the Supabase database password) | Only if compromised |
+
+Where a common provider's credentials fall:
+
+| Provider | Credential | Bucket |
+|---|---|---|
+| Vercel | Access token used by CI / deploy scripts | CI/CD and deploy-platform tokens |
+| Expo (EAS) | `EXPO_TOKEN` (personal or robot access token) | CI/CD and deploy-platform tokens |
+| Supabase | Service-role / secret API key | External service API keys |
+| Supabase | CLI access token used by CI (`SUPABASE_ACCESS_TOKEN`) | CI/CD and deploy-platform tokens |
+| Supabase | Database password | Database passwords |
+| Resend | API key | External service API keys |
+
+Public client keys (e.g. a Supabase anon / publishable key, an Expo public env var) are not
+secrets — they ship in the client — and need no scheduled rotation.
 
 ---
 
@@ -100,9 +114,9 @@ If a secret was committed, sent in a message, or appeared in a log:
 # JWT Secret (minimum 64 characters)
 openssl rand -base64 48
 
-# UUID for opaque tokens (any language's UUID generator works)
-uuidgen
-node -e "console.log(require('crypto').randomUUID())"   # e.g. Node
+# Opaque tokens: 32 random bytes from a CSPRNG (a UUID v4 has only 122 random bits)
+openssl rand -base64 32 | tr '+/' '-_' | tr -d '='       # base64url
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"   # e.g. Node
 
 # Hex for encryption keys
 openssl rand -hex 32
@@ -134,7 +148,7 @@ project on one possible stack (Upstash, Sentry, Resend) — adapt names and serv
 ```bash
 # App
 NODE_ENV=
-APP_PORT=
+PORT=                     # most PaaS (e.g. Railway) inject PORT — read it, not a custom name
 
 # Auth
 JWT_SECRET=

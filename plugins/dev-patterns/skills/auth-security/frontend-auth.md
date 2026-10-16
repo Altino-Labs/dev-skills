@@ -168,3 +168,19 @@ export function middleware(request: NextRequest) {
 
 export const config = { matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'] };
 ```
+
+## `@supabase/ssr` — browser cookies are readable by JavaScript
+
+`createBrowserClient` from `@supabase/ssr` stores the session (access **and** refresh token) in
+cookies that the browser client itself writes and reads — so they are **not `httpOnly`**. Any
+XSS on the origin can read and exfiltrate the refresh token. That is the same lower-security
+web posture as the documented browser-storage fallback (`dev-core:auth-security` → secure
+token storage), not the `httpOnly`-cookie default — record it as such if you accept it.
+
+Server-side alternative (BFF) when the web app must meet the `httpOnly` default:
+- Only server code (Next.js route handlers / server actions / middleware with
+  `createServerClient`, or your own API) talks to Supabase Auth and holds the tokens.
+- The server sets the session as `httpOnly`, `Secure`, `SameSite` cookies; browser code never
+  touches tokens and calls the server, which forwards the access token to the API.
+- Add CSRF protection for cookie-authenticated state-changing requests
+  (`dev-core:auth-security`).

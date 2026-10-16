@@ -104,8 +104,10 @@ Feature stores live in `features/*/store/`.
 
 Every app has a single shared HTTP client module (e.g. `src/lib/api-client.ts`). Key behaviors:
 
-1. **Always attach `statusCode`** to every thrown error — via an `apiError(message, statusCode)` helper.  
-   The component's `catch` can then use `e.statusCode` to tell errors apart without depending on `e.message` (which carries internal API codes).
+1. **Always attach `statusCode` and `code`** to every thrown error — via an `apiError(...)` helper that reads the
+   standard error envelope `{ error: { code, message, details } }` (`dev-core:error-handling`).  
+   The component's `catch` can then use `e.statusCode` / `e.code` (the stable machine code, e.g. `ENTITY_NOT_FOUND`)
+   to tell errors apart without parsing `e.message`.
 
 2. **Automatic token refresh** — on a 401, try to refresh the token before retrying.  
    A `skipRefresh = true` parameter disables this for public endpoints (login, register).  
@@ -115,9 +117,13 @@ Every app has a single shared HTTP client module (e.g. `src/lib/api-client.ts`).
 
 ```typescript
 // src/lib/api-client.ts
-function apiError(message: string, statusCode: number): Error {
-  const err = new Error(message) as Error & { statusCode: number };
+export type ApiError = Error & { statusCode: number; code: string; details?: unknown };
+
+function apiError(statusCode: number, code: string, message: string, details?: unknown): ApiError {
+  const err = new Error(message) as ApiError;
   err.statusCode = statusCode;
+  err.code = code;           // stable machine code from the API — branch on this, not on message
+  err.details = details;     // e.g. validation errors: [{ field, message }]
   return err;
 }
 
@@ -128,8 +134,14 @@ export async function apiRequest<T>(
 ): Promise<T> {
   // ... does the fetch, tries refresh on 401 if !skipRefresh ...
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ message: res.statusText }));
-    throw apiError(body.message ?? 'Unknown error', res.status);
+    // Error envelope (dev-core:error-handling): { error: { code, message, details } }
+    const body = await res.json().catch(() => null);
+    throw apiError(
+      res.status,
+      body?.error?.code ?? 'UNKNOWN_ERROR',
+      body?.error?.message ?? res.statusText,
+      body?.error?.details,
+    );
   }
   // ...
 }
@@ -144,6 +156,8 @@ export async function apiRequest<T>(
     setError('Cannot reach the server. Check your connection.');
   } else if (e?.statusCode === 401 || e?.statusCode === 403) {
     setError('Invalid credentials.');            // context-specific message
+  } else if (e?.code === 'OPTIMISTIC_LOCK_CONFLICT') {
+    setError('Someone else changed this record. Reload and try again.');   // branch on the API code
   } else if (e?.statusCode === 409) {
     setError('This record already exists.');     // same
   } else {
@@ -152,7 +166,9 @@ export async function apiRequest<T>(
 }
 ```
 
-**Never show `e.message` directly to the user** — it contains the API's internal code (`UNAUTHENTICATED`, `CONFLICT`, etc.), not a readable sentence. User-facing strings belong in the app's UI language.
+**Never show `e.message` directly to the user** — it is the API's developer-facing message (and `e.code` is a
+machine code like `ENTITY_NOT_FOUND`), not a sentence written for users in the app's language. Map
+`e.code` / `e.statusCode` to user-facing strings in the app's UI language.
 
 ---
 
@@ -625,7 +641,7 @@ render — the cache is lost on every re-render.
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 0,                // always stale → refetch on mount
+      staleTime: 1000 * 60 * 2,    // 2 min default — override per query (see "staleTime rules by data type")
       gcTime: 1800000,             // 30 min in cache (avoids spinner when returning to tab)
       refetchOnWindowFocus: false, // avoids refetch on browser window focus
       retry: 1,
@@ -634,8 +650,13 @@ const queryClient = new QueryClient({
 });
 ```
 
-`staleTime: 0` + `gcTime: 30min`: first visit shows a brief spinner; subsequent visits show
-cached data while refetch runs in the background.
+A non-zero default plus per-query values from the "staleTime rules by data type" table (real-time
+data overrides it down to 0–2 min, reference data up to 10 min). `gcTime: 30min`: first visit
+shows a brief spinner; returning to a screen shows cached data immediately.
+
+**Cost of `staleTime: 0`:** every mount, `useFocusEffect` refetch and reconnect hits the API
+again — more requests and server load, more background spinners and list flicker, more mobile
+data. Use 0 only for queries that must be live, set on that query, not as the global default.
 
 ---
 

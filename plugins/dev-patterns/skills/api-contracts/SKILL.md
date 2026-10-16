@@ -62,10 +62,28 @@ export function encodeCursor(sortValue: string, id: string): string {
   return Buffer.from(`${sortValue}|${id}`).toString('base64');
 }
 
-export function decodeCursor(cursor: string): { sortValue: string; id: string } | null {
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// timestamptz as Supabase returns it, e.g. 2026-05-28T14:32:00.123456+00:00
+const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
+// Letters, digits, space, '_' and '-' only — no PostgREST syntax: , . ( ) " \ :
+const SAFE_TEXT_RE = /^[\p{L}\p{N} _-]{1,200}$/u;
+
+export type CursorSortKind = 'timestamp' | 'text';
+
+// The cursor is untrusted input: every field is validated here, before it reaches .or()
+export function decodeCursor(
+  cursor: string,
+  sortKind: CursorSortKind = 'timestamp',
+): { sortValue: string; id: string } | null {
   try {
-    const [sortValue, id] = Buffer.from(cursor, 'base64').toString('utf-8').split('|');
-    return sortValue && id ? { sortValue, id } : null;
+    const decoded = Buffer.from(cursor, 'base64').toString('utf-8');
+    const sep = decoded.lastIndexOf('|');
+    if (sep <= 0) return null;
+    const sortValue = decoded.slice(0, sep);
+    const id = decoded.slice(sep + 1);
+    if (!UUID_RE.test(id)) return null;
+    const pattern = sortKind === 'timestamp' ? TIMESTAMP_RE : SAFE_TEXT_RE;
+    return pattern.test(sortValue) ? { sortValue, id } : null;
   } catch { return null; }
 }
 
@@ -86,7 +104,13 @@ export function parseLimit(raw: string | undefined): number {
 ```
 
 Repository — sort by `(timestamp_col, id)` so ties break deterministically, and use
-PostgREST's `.or()` to express the composite `WHERE (col, id) < (cursor_col, cursor_id)`:
+PostgREST's `.or()` to express the composite `WHERE (col, id) < (cursor_col, cursor_id)`.
+
+> **`.or()` takes a filter string, not bound parameters.** Interpolating a raw decoded cursor
+> lets a crafted cursor inject PostgREST syntax (`,` `.` `(` `)`) — extra conditions that widen
+> the result set. Only ever interpolate values that passed `decodeCursor`'s validation (UUID id,
+> timestamp or safe-text sort value). If a text sort column can hold characters the safe-text
+> pattern rejects, paginate it with an RPC that takes the cursor as typed parameters instead.
 
 ```typescript
 async findByProject(projectId: string, options?: { cursor?: string; limit?: number }) {
@@ -237,7 +261,7 @@ let query = this.supabase.admin.from('projects').select('*')
   .limit(limit + 1);
 
 if (options?.cursor) {
-  const decoded = decodeCursor(options.cursor);
+  const decoded = decodeCursor(options.cursor, 'text');   // safe-text validation for a name column
   if (decoded) {
     query = query.or(
       `name.gt.${decoded.sortValue},and(name.eq.${decoded.sortValue},id.gt.${decoded.id})`,
@@ -251,7 +275,8 @@ identical.
 
 ### Active vs history split in this stack
 
-Typical repository shape: `findActiveByProject` (open statuses, no pagination) +
+Typical repository shape: `findActiveByProject` (open statuses, no pagination — the endpoint
+returns `{ items: [...] }`, no `next_cursor`, never a bare array) +
 `findHistoryByProject` (terminal statuses, cursor-paginated); on the frontend a
 `useItems` + `useItemHistory` pair, combined in the screen. Infinite-scroll wiring
 (`onScroll`, back-to-top) is gated on `filter === 'history-tab' || filter === 'all'`.

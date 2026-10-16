@@ -355,7 +355,7 @@ Missing this causes `Cannot PATCH /api/v1/...` (404) in the frontend.
 | File | Minimum content |
 |---|---|
 | `dto/update-<entity>.dto.ts` | `PartialType(OmitType(CreateDto, ['owner_id', ...] as const))` |
-| `use-cases/update-<entity>.use-case.ts` | `NotFoundException` if not found + `update().eq('id').select().single()` |
+| `use-cases/update-<entity>.use-case.ts` | `EntityNotFoundException` (domain) if not found + `update().eq('id').select().single()` |
 | `<entity>.controller.ts` | `@Patch('<entity>/:id')` with `@Param('id')` + typed body |
 | `<entity>.module.ts` | use case registered in `providers` |
 
@@ -376,14 +376,18 @@ export class UpdateEntityDto extends PartialType(
 async execute(id: string, dto: UpdateEntityDto): Promise<Entity> {
   const { data: existing } = await this.supabase.client
     .from('table').select('id').eq('id', id).single();
-  if (!existing) throw new NotFoundException('Record not found');
+  if (!existing) throw new EntityNotFoundException('Entity', id);   // domain exception → 404 via the filter
 
   const { data, error } = await this.supabase.client
     .from('table').update(dto).eq('id', id).select().single();
-  if (error || !data) throw new InternalServerErrorException(error?.message);
+  if (error || !data) throw new DatabaseException('PERSISTENCE_FAILED', error?.message ?? 'Update failed');
   return data as Entity;
 }
 ```
+
+Use cases throw the plugin's domain / infrastructure exceptions (`dev-patterns:error-handling`),
+never `NotFoundException` / `InternalServerErrorException` from `@nestjs/common` — the
+`AppExceptionFilter` maps them to the HTTP status (`dev-core:error-handling`).
 
 **Controller pattern:**
 
@@ -594,7 +598,7 @@ export class ReactivateResourceUseCase {
 
   async execute(id: string): Promise<Resource> {
     const item = await this.repo.findById(id);
-    if (!item) throw new NotFoundException('Resource not found');
+    if (!item) throw new EntityNotFoundException('Resource', id);   // never @nestjs/common's NotFoundException
     return this.repo.reactivate(id);
   }
 }
@@ -619,7 +623,7 @@ async reactivate(id: string): Promise<Resource> {
     .eq('id', id)
     .select()
     .single();
-  if (error || !data) throw new InternalServerErrorException(error?.message);
+  if (error || !data) throw new DatabaseException('PERSISTENCE_FAILED', error?.message ?? 'Reactivate failed');
   return data as Resource;
 }
 ```
@@ -639,15 +643,17 @@ export function reactivateResource(id: string): Promise<void> {
 
 ## @IsIn instead of @IsEnum for string literal arrays
 
-`@IsEnum` from class-validator does **not** work when the argument is a plain array of strings.
-It silently accepts invalid values or rejects all, causing `"Invalid request payload"` with no clear reason.
+`@IsEnum([...])` with a plain array of strings does validate correctly — the only defect is the
+error message: it doesn't list the allowed values, so the client gets a vague validation error.
+`@IsIn([...])` reports them (`status must be one of the following values: ...`).
 
-**Rule:** use `@IsIn([...])` for any field whose valid values are a hard-coded list:
+**Rule:** prefer `@IsIn([...])` for a useful message on any field whose valid values are a
+hard-coded list:
 
 ```typescript
 import { IsIn, IsOptional } from 'class-validator';
 
-// ❌ Does not work with arrays
+// ⚠️ Validates, but the error message doesn't list the allowed values
 @IsEnum(['REQUESTED', 'SCHEDULED', 'COMPLETED', 'CANCELLED'])
 status?: string;
 
@@ -657,7 +663,7 @@ status?: string;
 status?: string;
 ```
 
-`@IsEnum(EnumType)` only works correctly when passed an actual TypeScript `enum` object (not a string array).
+`@IsEnum(EnumType)` with a real TypeScript `enum` object is fine.
 For partial enums (e.g. "status can only be set to X or Y on create") always prefer `@IsIn`.
 
 ---

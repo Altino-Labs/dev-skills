@@ -96,7 +96,7 @@ If created inside the component without `useState`, a new `QueryClient` is gener
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 0,                // always stale → refetch on mount
+      staleTime: 1000 * 60 * 2,    // 2 min default — override per query (see "staleTime rules by data type")
       gcTime: 1800000,             // 30 min in cache (avoids spinner when returning to tab)
       refetchOnWindowFocus: false, // avoids refetch on browser window focus
       retry: 1,
@@ -105,7 +105,13 @@ const queryClient = new QueryClient({
 });
 ```
 
-`staleTime: 0` + `gcTime: 30min`: first visit shows a brief spinner; subsequent visits show cached data while refetch runs in the background.
+A non-zero default plus per-query values from the "staleTime rules by data type" table (real-time
+data overrides it down to 0–2 min, reference data up to 10 min). `gcTime: 30min`: first visit
+shows a brief spinner; returning to a screen shows cached data immediately.
+
+**Cost of `staleTime: 0`:** every mount, `useFocusEffect` refetch and reconnect hits the API
+again — more requests and server load, more background spinners and list flicker, more mobile
+data. Use 0 only for queries that must be live, set on that query, not as the global default.
 
 ---
 

@@ -50,8 +50,9 @@ CREATE POLICY "user_isolation" ON <table>
 
 ### Multi-tenant RLS — required pattern with SECURITY DEFINER
 
-**WARNING:** Policies that make a subquery on the members table cause infinite recursion.
-Always use `SECURITY DEFINER` functions to break the cycle. See the `migrations` skill for the complete pattern.
+**WARNING:** A policy **on the members table** that subqueries the members table recurses
+infinitely. Use `SECURITY DEFINER` helpers to break the cycle — and for role/type predicates
+too. See the `migrations` skill for the complete pattern.
 
 ```sql
 -- Step 1: create helper function BEFORE the policies
@@ -63,14 +64,23 @@ AS $$
   WHERE user_id = user_uuid AND accepted_at IS NOT NULL
 $$;
 
--- Step 2: use the function in the policies
-CREATE POLICY "tenant_member_access" ON <data_table>
-  FOR ALL USING (tenant_id IN (SELECT public.get_tenant_ids_for_user(auth.uid())));
+-- Step 2: use the function in the policies — members READ; the API (service_role) writes
+CREATE POLICY "tenant_member_read" ON <data_table>
+  FOR SELECT TO authenticated
+  USING (tenant_id IN (SELECT public.get_tenant_ids_for_user(auth.uid())));
+
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON <data_table> FROM anon, authenticated;
 
 -- Service role bypasses RLS for administrative operations
 CREATE POLICY "service_role_access" ON <data_table>
   FOR ALL TO service_role USING (true);
 ```
+
+A `FOR ALL` member policy would let every member insert/update/delete through PostgREST,
+bypassing the API's role matrix. Add write policies only when clients must write directly, and
+only mirroring the role matrix (role predicates through a `SECURITY DEFINER` helper). Check
+`authenticated`'s table privileges in CI — query in the `migrations` skill ("Required base
+policies").
 
 **Lock down grants on every new SECURITY DEFINER function** — Supabase's default privileges make
 every new function executable by `anon`. Full checklist and audit query in `SKILL.md` →
@@ -117,16 +127,29 @@ supabase status -o env | grep -E "ANON_KEY|SERVICE_ROLE_KEY|JWT_SECRET"
 
 `passport-jwt` defaults to HS256 and **fails silently** with ES256 tokens (returns 401 with no useful error):
 
+The single source for this guard (error codes, module registration, `@Public()`) is
+`dev-patterns:auth-security` → backend-auth. Minimal shape:
+
 ```typescript
-// ✅ Correct — algorithm-agnostic, works with ES256
+// ✅ Correct — algorithm-agnostic (works with ES256), honours @Public(), checks the scheme
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(
+    private readonly supabase: SupabaseService,
+    private readonly reflector: Reflector,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    // Registered as a global guard: public routes (login, register, health) must pass through
+    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+      context.getHandler(), context.getClass(),
+    ]);
+    if (isPublic) return true;
+
     const request = context.switchToHttp().getRequest();
-    const token = request.headers['authorization']?.slice(7);
-    if (!token) throw new UnauthorizedException('Missing token');
+    const authHeader: string | undefined = request.headers['authorization'];
+    if (!authHeader?.startsWith('Bearer ')) throw new UnauthorizedException('Missing token');
+    const token = authHeader.slice(7);
 
     const { data, error } = await this.supabase.client.auth.getUser(token);
     if (error || !data?.user) throw new UnauthorizedException('Invalid or expired token');

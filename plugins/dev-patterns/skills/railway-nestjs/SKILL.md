@@ -53,54 +53,77 @@ Never use `^latest` for Fastify plugins — always pin to the correct major.
 ## NestJS Dockerfile for monorepo
 
 ```dockerfile
-# apps/api/Dockerfile
-FROM node:20-alpine AS builder
-WORKDIR /app
-COPY package*.json ./
-COPY apps/api/package*.json ./apps/api/
-COPY packages/ ./packages/
-RUN npm ci
-COPY apps/api ./apps/api
-RUN npm run build -w apps/api
+# apps/api/Dockerfile — build context: the repository root
+# Node 24 LTS, the same major as CI. pnpm comes from corepack, which reads the exact version
+# pinned in the root package.json "packageManager" field (e.g. "pnpm@10.x.y").
+FROM node:24-alpine AS base
+RUN corepack enable
 
-FROM node:20-alpine AS runner
+FROM base AS builder
+WORKDIR /repo
+COPY . .
+RUN pnpm install --frozen-lockfile
+RUN pnpm --filter api build
+# Self-contained production install of the api package (workspace deps included, no devDeps)
+RUN pnpm --filter api deploy --prod /prod/api
+
+FROM node:24-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
-COPY --from=builder /app/apps/api/dist ./dist
-COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder --chown=node:node /prod/api/package.json ./package.json
+COPY --from=builder --chown=node:node /prod/api/node_modules ./node_modules
+COPY --from=builder --chown=node:node /repo/apps/api/dist ./dist
+USER node
 EXPOSE 3000
+# Liveness only (no dependency pings). The path includes the global prefix.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD wget -qO- "http://127.0.0.1:${PORT:-3000}/api/v1/health/live" > /dev/null || exit 1
 CMD ["node", "dist/main.js"]
 ```
+
+Notes:
+- `api` is the package name of `apps/api` — adjust the `--filter`. On pnpm 10+, `pnpm deploy`
+  requires `inject-workspace-packages=true` in `.npmrc` (or the `--legacy` flag).
+- `USER node` — the official image ships an unprivileged `node` user; never run the API as root.
+- The Dockerfile `HEALTHCHECK` covers runtimes that honour it (docker compose, other hosts);
+  what gates a Railway deploy is the health check path configured on the service (below).
+- Copying the whole repo into the builder stage busts the install cache on every change. For
+  faster builds, copy the manifests and lockfile first (or use `pnpm fetch`) before the sources.
 
 ---
 
 ## Required health checks
 
+Liveness vs readiness: `dev-core:logging-observability`. Readiness returns **503** when a
+critical dependency fails; degraded optional dependencies don't fail it
+(`dev-core:resilience-patterns`).
+
 ```typescript
 // interfaces/http/health/health.controller.ts
+// With app.setGlobalPrefix('api/v1') these routes are /api/v1/health/live and /api/v1/health/ready
 @Controller('health')
 @Public()
 export class HealthController {
-  @Get('live')   // Railway uses this — is the app up?
+  @Get('live')   // Railway uses this — is the process up? No dependency pings.
   live() { return { status: 'ok' }; }
 
-  @Get('ready')  // CI/CD uses this — is the app ready to receive traffic?
-  async ready() {
-    return {
-      status: 'ok',
-      timestamp: new Date().toISOString(),
-      checks: {
-        database: await this.db.ping(),
-        cache:    await this.redis.ping(),
-      },
+  @Get('ready')  // CI/CD uses this — can the instance serve traffic?
+  async ready(@Res({ passthrough: true }) reply: FastifyReply) {
+    const [db, cache] = await Promise.allSettled([this.db.ping(), this.redis.ping()]);
+    const checks = {
+      database: db.status === 'fulfilled' ? 'ok' : 'degraded',     // critical
+      cache:    cache.status === 'fulfilled' ? 'ok' : 'degraded',  // optional
     };
+    const ready = checks.database === 'ok';
+    reply.status(ready ? 200 : 503);
+    return { status: ready ? 'ok' : 'unavailable', timestamp: new Date().toISOString(), checks };
   }
 }
 ```
 
-**Configure in Railway:**
+**Configure in Railway** (the path must include the global prefix — the route that actually exists):
 ```
-Health check path: /health/live
+Health check path: /api/v1/health/live
 Restart policy: always
 ```
 
@@ -122,7 +145,8 @@ async function bootstrap() {
     });
   });
 
-  await app.listen(process.env.APP_PORT ?? 3000);
+  // Railway injects PORT — listen on it, on all interfaces
+  await app.listen(process.env.PORT ?? 3000, '0.0.0.0');
 }
 ```
 
@@ -135,8 +159,8 @@ which can corrupt in-flight requests.
 
 ```bash
 NODE_ENV=production         # or staging
-APP_PORT=3000
-DATABASE_URL=               # connection pooler (port 6543 in Supabase)
+PORT=3000                   # injected by Railway — set it yourself only for local runs
+DATABASE_URL=               # only with a direct Postgres client: transaction pooler (port 6543 in Supabase)
 JWT_SECRET=                 # minimum 64 characters — generate with: openssl rand -base64 48
 TOKEN_HASH_PEPPER=          # optional — keys the stored refresh-token hash (refresh tokens are opaque)
 UPSTASH_REDIS_REST_URL=
@@ -148,15 +172,22 @@ SENTRY_DSN=
 
 ## Automatic deploy
 
-Railway detects pushes to the configured branch and deploys automatically.
+With the **Railway GitHub App** connected to a service, Railway deploys every push to the
+configured branch by itself — no CI step is needed (a `railway up` in CI would build and
+deploy a second time; see `dev-patterns:github-actions-monorepo`). To deploy only after CI
+passes, enable the service's "wait for CI" option instead of deploying from Actions.
 
 ```
 Production service → branch: main
 Staging service    → branch: develop
 ```
 
-After each deploy, Railway runs the health check. If `/health/live` does not respond
-within 30s, the deploy is automatically rolled back.
+After each deploy, Railway runs the health check. If `/api/v1/health/live` does not respond
+within the configured timeout, the new deployment is not promoted.
+
+**Config as code:** keep build and deploy settings in a `railway.json` / `railway.toml` next to
+the service (e.g. `dockerfilePath`, `healthcheckPath`, `healthcheckTimeout`,
+`restartPolicyType`) so they are reviewed in PRs instead of living only in the dashboard.
 
 ---
 
@@ -174,10 +205,8 @@ npm run migrate:rollback --env production
 
 ## Limits and costs
 
-| Plan | CPU | RAM | Cost |
-|---|---|---|---|
-| Free ($5 credit/month) | Shared | 512MB | ~$0 |
-| Hobby ($5/service) | Shared | 512MB | $10/month (2 services) |
-| Pro | Dedicated | Configurable | Pay-as-you-go |
+Railway's plans and prices change — the old free tier with a monthly credit was
+discontinued. Check the current plans on Railway's pricing page before sizing a project, and
+record the plan you chose (and why) in the project's infrastructure doc.
 
-**Trigger to scale:** consistent usage > $5/month in credits or p95 latency > 800ms.
+**Trigger to scale:** sustained resource usage near the plan's limits or p95 latency > 800ms.

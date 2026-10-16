@@ -273,9 +273,12 @@ How each response kind appears in each mode (page shapes: `dev-core:api-contract
 | Single resource | `{ "data": { ... } }` | `{ ... }` |
 | Offset page | `{ "data": [ ... ], "meta": { ... } }` — already in envelope shape, passes through untouched | `{ "data": [ ... ], "meta": { ... } }` as-is |
 | Cursor page | `{ "data": { "items": [ ... ], "next_cursor": "..." } }` | `{ "items": [ ... ], "next_cursor": "..." }` as-is |
+| Bounded list (unpaginated, e.g. an "active" slice) | `{ "data": { "items": [ ... ] } }` | `{ "items": [ ... ] }` |
 | Delete | `204` with no body, or `200` with `{ "data": { "deleted_id": "..." } }` | `204` with no body, or `200` with `{ "deleted_id": "..." }` |
 
-Never a raw array at the top level, in either mode. For deletes, pick one of the two forms per
+Never a raw array at the top level, in either mode — a bounded list is `{ "items": [ ... ] }`
+too (a non-wrapping project that already returns bare arrays for bounded lists may keep doing
+so consistently; new endpoints use `{ items }`). For deletes, pick one of the two forms per
 project and use it on every delete endpoint.
 
 ## Validation errors

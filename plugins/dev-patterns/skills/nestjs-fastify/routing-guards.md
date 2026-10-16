@@ -91,7 +91,7 @@ export class UpdateEntityUseCase {
 > **Never** inject `SupabaseService` or any infrastructure class into a Use Case.
 > **Never** throw `NotFoundException` or `InternalServerErrorException` from `@nestjs/common` in a Use Case.
 > Both violate DIP (the domain/application layer must not depend on infrastructure or the HTTP framework) — review should reject them.
-> Use `IEntityRepository` (interface) and domain exceptions (`EntityNotFoundException`, `EntityPersistenceException`).
+> Use `IEntityRepository` (interface) and domain exceptions (`EntityNotFoundException`, and `DatabaseException` for persistence failures — `dev-patterns:error-handling`).
 
 **Controller pattern:**
 

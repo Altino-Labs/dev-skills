@@ -93,7 +93,7 @@ The `dev-core` examples are TypeScript read as pseudo-code. Common translations:
 | Event-name constants | `StrEnum` | `enum` | `enum` / `const` | `const` |
 | Migrations | Alembic / Django | Flyway / Liquibase | EF Core migrations | golang-migrate / goose |
 
-## What's included (v1.0)
+## What's included (v1.0.1)
 
 ### `dev-core` (`plugins/dev-core/`)
 

@@ -75,15 +75,21 @@ plugin's default: snake_case — `dev-core:api-contracts`).
 
 ## Refresh token
 
-- **Opaque** (≥ 128 bits from a cryptographically secure random generator, e.g. a random
-  UUID v4 or longer), not a JWT — stored server-side **as a hash only** (`refresh_tokens`:
-  `token_hash`, `user_id`, `expires_at`, `revoked_at`). A leaked table then yields no usable
-  tokens.
+- **Opaque** (≥ 128 bits from a cryptographically secure random generator, e.g. 32 random
+  bytes encoded as hex or base64url — a UUID v4 carries only 122 random bits), not a JWT —
+  stored server-side **as a hash only** (`refresh_tokens`: `token_hash`, `user_id`,
+  `expires_at`, `revoked_at`). A leaked table then yields no usable tokens.
 - **Lookup hashes first:** the server hashes the presented token (e.g. SHA-256 — the token is
   high-entropy, so a fast hash is enough; optionally keyed with a server-side pepper, see
   `dev-core:secrets-rotation`) and looks up by `token_hash` (unique index). Never query by the
   raw token. If the code ever compares a presented secret with a stored one in application
   code, use a constant-time comparison.
+- **Provider-owned refresh tokens:** the hash-at-rest and lookup-by-hash rules above assume
+  the application issues its own refresh tokens. When an external auth provider issues and
+  stores them (a hosted identity service), the application never sees their storage: record
+  that in the project's delta skill, and check — and record — the provider's actual behaviour
+  (how tokens are stored, whether they rotate on every use, reuse detection, revocation on
+  logout, lifetime).
 - **Lifetime:** long — 30 days to months. Record the project's real value.
 - **Rotation on every use:** each refresh revokes the presented token and issues a new
   access + refresh pair.

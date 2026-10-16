@@ -63,8 +63,12 @@ validation-error shape, are defined in `dev-core:error-handling` — do not rede
 endpoint. List endpoints add a `meta`
 object (see pagination below).
 
-Never a raw top-level array; follow the project's success-envelope choice
-(`dev-core:error-handling`, which also shows how each page shape appears in each mode).
+Never a raw top-level array — a list is always an object with an `items` (or `data`) key, so
+fields can be added later without breaking clients. This includes bounded, unpaginated lists
+(`{ "items": [ ... ] }`, no `next_cursor`). Follow the project's success-envelope choice
+(`dev-core:error-handling`, which also shows how each list shape appears in each mode). A
+non-wrapping project that already returns bare arrays for bounded lists may keep doing so
+consistently; new projects and new endpoints use `{ items }`.
 
 ## Prefix and versioning
 
@@ -151,6 +155,14 @@ Rules:
   Sort by `(sort_col, id)` — the `id` tie-breaker is required, timestamps aren't unique.
 - **The cursor is opaque** to the client: an encoding of `sort_value|id` (e.g. base64). Decode
   defensively — an invalid cursor is treated as "no cursor", not a 500.
+- **The cursor is untrusted input.** The client can send any bytes. Validate every decoded
+  field before it reaches a query: `id` must be a UUID (or whatever the id type is), and
+  `sort_value` must match the sort column's type — a timestamp pattern, or a safe-text pattern
+  that excludes the query language's syntax characters. Prefer bound parameters; **never
+  interpolate an unvalidated value into a filter string** (e.g. a PostgREST `or=(...)`, an
+  OData `$filter`, a hand-built `WHERE`) — a crafted cursor would inject filter syntax.
+  Choose the pattern so every value the column can legitimately hold passes; otherwise a real
+  cursor is rejected and the client gets page one again.
 - **Fetch `limit + 1` rows** to detect a next page without a `COUNT` query.
 - **Clamp `limit` server-side** (default 20, max 50) — never trust the client value.
 
@@ -162,10 +174,27 @@ export function encodeCursor(sortValue: string, id: string): string {
   return base64Encode(`${sortValue}|${id}`);
 }
 
-export function decodeCursor(cursor: string): { sortValue: string; id: string } | null {
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// ISO-8601 timestamp as the database returns it, e.g. 2026-05-28T14:32:00.123456+00:00
+const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
+// Letters, digits, space, '_' and '-' only — no , . ( ) " \ : or other filter syntax
+const SAFE_TEXT_RE = /^[\p{L}\p{N} _-]{1,200}$/u;
+
+export type CursorSortKind = 'timestamp' | 'text';
+
+export function decodeCursor(
+  cursor: string,
+  sortKind: CursorSortKind = 'timestamp',
+): { sortValue: string; id: string } | null {
   try {
-    const [sortValue, id] = base64Decode(cursor).split('|');
-    return sortValue && id ? { sortValue, id } : null;
+    const decoded = base64Decode(cursor);
+    const sep = decoded.lastIndexOf('|');
+    if (sep <= 0) return null;
+    const sortValue = decoded.slice(0, sep);
+    const id = decoded.slice(sep + 1);
+    if (!UUID_RE.test(id)) return null;
+    const pattern = sortKind === 'timestamp' ? TIMESTAMP_RE : SAFE_TEXT_RE;
+    return pattern.test(sortValue) ? { sortValue, id } : null;   // validated before any query
   } catch { return null; }
 }
 
@@ -204,10 +233,11 @@ independently.
 open items (bounded — a parent has a handful open at once) with closed/terminal items
 (accumulates forever) should not be paginated uniformly:
 
-- `GET /projects/:project_id/<resource>` — open statuses only, plain list, no cursor.
+- `GET /projects/:project_id/<resource>` — open statuses only, unpaginated:
+  `{ "items": [ ... ] }` (no `next_cursor`) — still an object, never a bare array.
 - `GET /projects/:project_id/<resource>/history` — terminal statuses, cursor-paginated.
 
-The client combines them per tab (`[...active, ...history]` for an "All" tab) and gates the
+The client combines them per tab (`[...active.items, ...history]` for an "All" tab) and gates the
 infinite-scroll wiring on the tabs that read history.
 
 **Cursor sort column:** prefer a column that's always present and monotonic, even if it's not

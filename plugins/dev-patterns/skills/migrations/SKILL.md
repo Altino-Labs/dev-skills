@@ -65,10 +65,11 @@ that table exists**. Do not mix cross-table policies into the referencing table'
 -- 20...014_cross_table_policies.sql
 -- Create only after ALL referenced tables exist
 
-CREATE POLICY "entities_member_access" ON public.entities FOR ALL TO authenticated
+-- SELECT only: writes go through the API (service_role) — see "Required base policies" below
+CREATE POLICY "entities_member_read" ON public.entities FOR SELECT TO authenticated
   USING (id IN (SELECT public.get_entity_ids_for_user(auth.uid())));
 
-CREATE POLICY "orders_member_access" ON public.orders FOR ALL TO authenticated
+CREATE POLICY "orders_member_read" ON public.orders FOR SELECT TO authenticated
   USING (entity_id IN (SELECT public.get_entity_ids_for_user(auth.uid())));
 
 -- ... other tables with entity_id
@@ -79,8 +80,16 @@ Only policies that reference the membership table go into the dedicated migratio
 
 ## RLS — Infinite recursion: SECURITY DEFINER pattern
 
-**NEVER** use a direct subquery to `entity_members` inside RLS policies.
-This causes infinite recursion in PostgreSQL.
+**NEVER** subquery `entity_members` inside a policy **on `entity_members` itself** (or in a
+policy on another table that `entity_members`' own policies read back): evaluating the policy
+re-applies the same policy — infinite recursion. A policy on a child table that subqueries
+`entity_members` doesn't recurse by itself, but it is still evaluated under `entity_members`'
+RLS (slower, and it breaks as soon as that table's policies change), so use the helpers
+everywhere.
+
+Wrap **role/type predicates** (owner-only, admin-only, "member of type X") in a
+`SECURITY DEFINER` helper as well (`is_owner_of_entity` below) instead of inlining
+`role = 'OWNER'` subqueries in policies — one tested definition, no recursion, no RLS-on-RLS.
 
 ### Helper functions (create AFTER entity_members)
 
@@ -109,18 +118,28 @@ $$;
 
 ```sql
 -- ✅ Correct
-CREATE POLICY "member_access" ON entities
-  FOR ALL USING (id IN (SELECT public.get_entity_ids_for_user(auth.uid())));
+CREATE POLICY "member_read" ON entities
+  FOR SELECT TO authenticated USING (id IN (SELECT public.get_entity_ids_for_user(auth.uid())));
 
 -- ✅ Child tables (orders, records, etc.)
-CREATE POLICY "member_access" ON orders
-  FOR ALL USING (entity_id IN (SELECT public.get_entity_ids_for_user(auth.uid())));
+CREATE POLICY "member_read" ON orders
+  FOR SELECT TO authenticated USING (entity_id IN (SELECT public.get_entity_ids_for_user(auth.uid())));
 
--- ❌ WRONG — infinite recursion
-id IN (SELECT entity_id FROM entity_members WHERE user_id = auth.uid())
+-- ✅ Role predicate through the helper
+CREATE POLICY "owner_update" ON entities
+  FOR UPDATE TO authenticated
+  USING (public.is_owner_of_entity(auth.uid(), id))
+  WITH CHECK (public.is_owner_of_entity(auth.uid(), id));
+
+-- ❌ WRONG in a policy on entity_members — infinite recursion
+entity_id IN (SELECT entity_id FROM entity_members WHERE user_id = auth.uid())
 ```
 
 ### entity_members INSERT — without querying the table itself
+
+Only if clients insert memberships directly. When the API is the only writer (the default
+below), skip this policy and keep only the `service_role` one — as written, it lets any
+authenticated user add themselves to any entity.
 
 ```sql
 CREATE POLICY "members_self_insert" ON entity_members
@@ -150,15 +169,44 @@ SET search_path = public
 
 ## RLS — Required base policies for all tables with entity_id
 
+A `FOR ALL` member policy gives **every member** INSERT/UPDATE/DELETE straight through
+PostgREST with the public key — bypassing the server-side role matrix that
+`dev-core:auth-security` requires. When the API is the only writer (the usual case in this
+stack), members get **read** access only and every write goes through the API with
+`service_role`:
+
 ```sql
 ALTER TABLE <table> ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "<table>_member_access" ON <table>
-  FOR ALL USING (entity_id IN (SELECT public.get_entity_ids_for_user(auth.uid())));
+-- Members read their entities' rows
+CREATE POLICY "<table>_member_read" ON <table>
+  FOR SELECT TO authenticated
+  USING (entity_id IN (SELECT public.get_entity_ids_for_user(auth.uid())));
+
+-- No direct writes through PostgREST: the API (service_role) is the only writer
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON <table> FROM anon, authenticated;
 
 -- Required: admin client uses service_role which bypasses RLS via this policy
 CREATE POLICY "<table>_service_role" ON <table>
   FOR ALL TO service_role USING (true);
+```
+
+Add a write policy (and the matching `GRANT`) only when clients must write directly, and only
+mirroring the role matrix exactly — e.g. `FOR UPDATE ... USING (public.is_owner_of_entity(...))`
+for an owner-only action, never "any member". To make new tables start closed, flip the
+default once: `ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE INSERT, UPDATE, DELETE,
+TRUNCATE ON TABLES FROM anon, authenticated;` (affects tables created afterwards only).
+
+**CI check** — on a database migrated from scratch, fail the job if this returns a row that is
+not in a committed allowlist:
+
+```sql
+SELECT table_name, grantee, privilege_type
+FROM information_schema.role_table_grants
+WHERE table_schema = 'public'
+  AND grantee IN ('anon', 'authenticated')
+  AND privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')
+ORDER BY table_name, grantee, privilege_type;
 ```
 
 ## Date and time — always `timestamptz` (UTC)
@@ -234,16 +282,27 @@ avoids any DST or day-boundary edge case.
 
 ---
 
-## Date uniqueness — use `date` not `timestamptz`
+## Date uniqueness — no `::date` expressions in UNIQUE
+
+A UNIQUE constraint on a `timestamptz` column is fine (see "UNIQUE constraint to prevent
+double-submission"). What is invalid is a unique **expression** that casts it to a day:
+`timestamptz::date` depends on the session timezone, so it is not immutable and cannot be
+indexed.
 
 ```sql
--- ✅ Correct — date is immutable, supports UNIQUE
-recorded_at date NOT NULL DEFAULT CURRENT_DATE,
+-- ✅ Correct — UNIQUE on the timestamptz column itself (same instant = duplicate)
 UNIQUE (entity_id, recorded_at)
 
--- ❌ Wrong — timestamptz::date is not immutable, does not support UNIQUE
-UNIQUE (entity_id, (recorded_at::date))
+-- ✅ Correct — "one per calendar day": store the local day in its own date column
+recorded_on date NOT NULL,
+UNIQUE (entity_id, recorded_on)
+
+-- ❌ Wrong — timestamptz::date is not immutable, cannot back a UNIQUE index
+CREATE UNIQUE INDEX ON t (entity_id, (recorded_at::date));
 ```
+
+For "one per day", compute `recorded_on` in the app's timezone (or as a generated column with
+an explicit zone, e.g. `(recorded_at AT TIME ZONE '<app-timezone>')::date`, which is immutable).
 
 ## Extensions
 

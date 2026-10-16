@@ -208,6 +208,13 @@ throw new EntityNotFoundException('Order', id);
 throw new HttpError('Not found', 404);
 ```
 
+**Where a status code may live.** The dev-core classes carry only `code`, `message` and
+`details` — no transport field. A stack's implementation layer may *mirror* the hierarchy and
+attach the transport status to each class (e.g. `dev-patterns:error-handling` adds a
+`statusCode`) as the edge's mapping table, co-located with the class. That field is read only
+by the exception filter / error middleware: domain and use-case code never passes, sets or
+reads it, so the rule above still holds.
+
 Mapping a domain exception to the transport (HTTP status, error envelope, gRPC code) happens
 once, in the interface layer (an exception filter / error-handling middleware) — see the
 project's error-handling conventions (`dev-core:error-handling`; for NestJS also

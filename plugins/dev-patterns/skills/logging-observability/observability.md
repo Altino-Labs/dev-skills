@@ -53,6 +53,7 @@ app.useGlobalFilters(
 
 ```typescript
 // interfaces/http/health/health.controller.ts
+// With app.setGlobalPrefix('api/v1') these are /api/v1/health/live and /api/v1/health/ready.
 @Controller('health')
 @Public()
 export class HealthController {
@@ -61,28 +62,32 @@ export class HealthController {
     private readonly redis: RedisHealthIndicator,
   ) {}
 
-  @Get()
-  async check() {
-    return {
-      status: 'ok',
-      timestamp: new Date().toISOString(),
-      checks: {
-        database: await this.db.ping(),
-        cache:    await this.redis.ping(),
-      },
+  @Get('live') // the platform's liveness probe: the process is up — no dependency checks
+  live() {
+    return { status: 'ok', timestamp: new Date().toISOString() };
+  }
+
+  @Get('ready') // can this instance serve traffic?
+  async ready(@Res({ passthrough: true }) reply: FastifyReply) {
+    const checks = {
+      database: await this.db.ping(), // critical
+      cache: await this.redis.ping(), // degraded only — the app works without it
     };
+    const ready = checks.database === 'ok';
+    reply.status(ready ? 200 : 503);
+    return { status: ready ? 'ok' : 'unavailable', timestamp: new Date().toISOString(), checks };
   }
 }
 ```
 
-Railway and Cloudflare use `GET /health` for health checks. A common, valid starting point
-is a minimal `/health/live` + `/health/ready` returning `{ status: 'ok' }` with no DB/cache
-ping. If the app uses a global prefix (e.g. `/api/v1`), make sure the path configured in
-the platform's health check matches the route that actually exists (prefixed via a
-`HealthController`, or unprefixed via routes registered directly on the Fastify instance in
-`main.ts`) — and don't keep both without recording which one the platform probes.
-See also `dev-patterns:railway-nestjs` (live vs ready) and `dev-core:resilience-patterns`
-(degraded vs critical dependencies).
+Point the platform's liveness probe at `/api/v1/health/live` and the post-deploy check at
+`/api/v1/health/ready`. Readiness returns **503** when a critical dependency (the database)
+fails and stays 200 with a degraded optional dependency (the cache) — see
+`dev-core:logging-observability` (liveness vs readiness) and `dev-core:resilience-patterns`
+(degraded vs critical dependencies). If the app uses a global prefix, make sure the path
+configured in the platform matches the route that actually exists, and don't keep a second,
+unprefixed copy of the routes without recording which one the platform probes. Same
+controller in `dev-patterns:railway-nestjs`.
 
 ---
 

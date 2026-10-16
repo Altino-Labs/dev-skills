@@ -49,6 +49,8 @@ All in [frontend-auth.md](frontend-auth.md):
   `router.replace('/login')`, never throw) and typical Supabase session lifetimes.
 - The Zustand auth store (reads `access_token` / `refresh_token` from the login response).
 - Route protection with Expo Router (`<Redirect>`) and the Next.js `middleware.ts`.
+- `@supabase/ssr`: `createBrowserClient` keeps tokens in JS-readable (non-`httpOnly`) cookies —
+  the caveat and the server-side (BFF) alternative.
 
 ## Required environment variables
 
