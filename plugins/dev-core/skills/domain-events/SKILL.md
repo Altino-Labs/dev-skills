@@ -35,6 +35,23 @@ Modules never reach into each other's internals. Two channels cross a module bou
   through its repositories, its tables or its internal use cases. (This is the Spring
   Modulith-style split: events for state changes, a published API for queries.)
 
+**Exception — aggregator modules (modular monolith, single deploy).** Some modules exist *only* to
+combine others: a "today" / to-do list, a report generator, a scheduler or notification sweep that
+scans several domains, an admin panel. Giving every domain module a query facade just so these can
+read is a lot of ceremony for one deploy, and the ceremony tends to be skipped rather than done well.
+A project may instead:
+
+- name its aggregator modules explicitly, and let **only those** read other modules through the
+  repository **interfaces** (read methods). Never the concrete infrastructure, never the tables;
+- keep the rule strict for every other module, and **enforce it mechanically** — an import-boundary
+  lint rule, where a new module is restricted by default;
+- list each remaining exception by file, with its reason, next to that rule.
+
+Writes still don't cross: an aggregator reads; it doesn't change another module's state, except
+through that module's own command path when a documented decision says so. One example is a
+coordinator that applies human-confirmed actions. Record the aggregator list and the exceptions in
+the project's own delta skill, not only in the lint config.
+
 ```
 OrderModule  →  publishes: OrderShippedEvent
              ←  subscribes: NotificationModule (SendOrderConfirmationEmailSubscriber)
