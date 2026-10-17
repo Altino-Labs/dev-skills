@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### `dev-core`
+
+- **`domain-events`** — "Core principle" gains an **aggregator modules** exception for modular
+  monoliths: explicitly named modules whose job is to combine others (to-do, reports, schedulers,
+  notification sweeps, admin) may read other modules through their repository interfaces. Every
+  other module stays strict, enforced by an import-boundary lint rule with per-file, reasoned
+  exceptions. Found by an audit where ~40 cross-module reads were almost all such aggregators,
+  and per-module query facades would have been ceremony.
+- **`clean-architecture/domain-services`** — the module boundary rule points to that exception.
+
 ## v1.0.1
 
 Corrections from a full audit of a real project using both plugins. No new skills.

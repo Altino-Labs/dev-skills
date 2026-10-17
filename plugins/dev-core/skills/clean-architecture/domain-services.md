@@ -50,7 +50,9 @@ business logic.
 > Cross-module writes and side effects happen via Domain Events published on the Event Bus;
 > cross-module reads go through the other module's public query API, never its repositories or
 > use cases (`dev-core:domain-events` — "Core principle"). UC→UC across modules
-> is the same violation as calling a Use Case from inside a subscriber.
+> is the same violation as calling a Use Case from inside a subscriber. The one sanctioned
+> relaxation is for explicitly named **aggregator modules** (read-only, lint-enforced). See
+> "Exception — aggregator modules" in `dev-core:domain-events`.
 
 ```typescript
 // ✅ Acceptable — A and B are in the SAME module; A delegates a complete operation to B
