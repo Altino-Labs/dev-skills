@@ -8,7 +8,8 @@ description: >
   Prometheus metrics with @willsoto/nestjs-prometheus, and the env vars. Invoke automatically
   (together with dev-core:logging-observability) when implementing logging at any layer,
   interceptors, request middlewares, uncaught error handling, or Sentry integration in a
-  NestJS/Fastify backend.
+  NestJS/Fastify backend — and, for the clients, Sentry in Next.js (`@sentry/nextjs`) and Expo
+  (`@sentry/react-native`).
 ---
 
 # Logging & Observability — NestJS/Fastify implementation
@@ -165,3 +166,56 @@ All in [observability.md](observability.md):
 - Prometheus with `@willsoto/nestjs-prometheus` + `prom-client`: the latency histogram, the
   error counter, optional counters/gauges, and the metric source for each alert threshold.
 - `SENTRY_DSN`, `LOG_LEVEL`, `NODE_ENV`.
+
+## Sentry in the clients — Next.js and Expo
+
+Applies `dev-core:logging-observability` → "Error tracking in client apps".
+
+- **Public env vars are inlined only when spelled out.** Next replaces
+  `process.env.NEXT_PUBLIC_X` and Expo replaces `process.env.EXPO_PUBLIC_X` at build time, *only*
+  at that literal spelling. `const env = process.env; env.NEXT_PUBLIC_SENTRY_DSN` is `undefined`
+  in the browser/app — Sentry ships switched off, while Jest (real `process.env`) and the Next
+  middleware (real server env) both look fine. Read each variable literally; a small spec that
+  reads the options file's source and asserts `process.env.<NAME>` appears for every public name
+  it uses guards it. Confirm by building with a sample DSN and grepping the client chunks / the
+  exported bundle for its host.
+- **`@sentry/nextjs` 11 (core v11): `sendDefaultPii` is gone, replaced by `dataCollection`.**
+  Unset, it collects user info (session envelopes carry `ip_address: "{{auto}}"`), cookies,
+  headers, bodies and query strings. Set every category, same baseline as the backend:
+
+  ```typescript
+  dataCollection: {
+    userInfo: false,
+    cookies: false,
+    httpHeaders: {
+      request: { deny: ['forwarded', '-ip', 'remote-', 'via', '-user'] },
+      response: { deny: ['forwarded', '-ip', 'remote-', 'via', '-user'] },
+    },
+    httpBodies: [],
+    urlQueryParams: false,
+    genAI: { inputs: false, outputs: false },
+    databaseQueryData: false,
+    queues: false,
+    graphQL: { document: false, variables: false },
+  },
+  ```
+
+  `@sentry/react-native` 7.x still sits on core v10, where `sendDefaultPii` exists (default
+  `false`) — revisit on its v11 upgrade.
+- **Type the options:** `type SentryInitOptions = NonNullable<Parameters<typeof Sentry.init>[0]>`
+  and declare the object as that type, so a dropped option is a compile error.
+- **Next.js wiring without the wizard:** `src/instrumentation-client.ts` (`Sentry.init`) and
+  `src/instrumentation.ts` (`register()` + `export const onRequestError =
+  Sentry.captureRequestError`). With a nonce CSP, add the DSN's ingest origin to `connect-src`
+  (`new URL(dsn).origin` drops the key). Public-prefixed variables can't be "Secret" on Vercel —
+  use the Config type.
+- **Expo without the config plugin:** the native SDK autolinks; `@sentry/react-native/expo` (and
+  `@sentry/cli`'s install script) only matter for source-map upload, and the plugin fails the
+  EAS build without a Sentry auth token. Older builds that receive the JS over the air keep
+  working without the native module (JS errors only).
+- **Verifying from the browser:** a `429` with `x-sentry-rate-limits: …:organization:
+  error_usage_exceeded` means the organization's error quota is spent — every project's errors
+  are dropped, the SDK backs off ~60 s, and session envelopes still return 200, which looks like
+  "it works". Check Stats & Usage before debugging the code. Custom per-key rate limits are a
+  Business-plan feature.
+
