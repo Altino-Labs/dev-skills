@@ -1,6 +1,6 @@
 {
   "name": "dev-patterns",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Patterns for TypeScript full-stack projects (NestJS/Fastify, Supabase/Postgres, Expo/React Native, pnpm monorepo; deploy on Railway/Cloudflare/EAS/GitHub Actions): Clean Architecture, API contracts, auth, migrations, testing, caching, queues, observability, mobile UX, email, a project bootstrap guide, and a post-write TypeScript lint hook. Use together with dev-core.",
   "author": {
     "name": "Altino Pavan"

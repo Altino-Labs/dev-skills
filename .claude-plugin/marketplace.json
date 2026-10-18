@@ -8,13 +8,13 @@
     {
       "name": "dev-core",
       "source": "./plugins/dev-core",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "description": "Stack-agnostic engineering practices for any project: Clean Architecture and tactical DDD, test patterns (fakes, contract and repository integration tests, mutation testing), error handling, database migrations, domain events (outbox, saga), logging/observability, API contracts, auth/security, git conventions, a pre-merge review gate, resilience patterns, secrets rotation, 8 role agents (architect, tech-lead, backend/frontend developer, dba, devops, qa, appsec) that read the project's own stack and rules, and safety hooks that ask before destructive commands and before writing likely secrets."
     },
     {
       "name": "dev-patterns",
       "source": "./plugins/dev-patterns",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "description": "Patterns for TypeScript full-stack projects (NestJS/Fastify, Supabase/Postgres, Expo/React Native, pnpm monorepo; deploy on Railway/Cloudflare/EAS/GitHub Actions): Clean Architecture, API contracts, auth, migrations, testing, caching, queues, observability, mobile UX, email, a project bootstrap guide, and a post-write TypeScript lint hook. Use together with dev-core."
     }
   ]
