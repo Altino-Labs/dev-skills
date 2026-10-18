@@ -208,6 +208,29 @@ Treat error tracking as a deliberate step: check whether the project has actuall
 production. A call to the error tracker must never fail the request — it is a non-critical
 dependency (`dev-core:resilience-patterns`).
 
+### Error tracking in client apps (web, mobile)
+
+Three failure modes that unit tests do not catch, all seen in one real rollout:
+
+- **Prove the configuration reached the shipped artifact.** Client builds inline public config
+  (the tracker's DSN, API URLs) at build time; a value read in a way the bundler doesn't
+  recognize is silently `undefined` in the browser/app, while tests pass because the test
+  runner has the real environment. Check the built bundle (or a real browser request) — not
+  only the tests — and send one deliberate test error end to end before calling it done.
+- **Type the tracker's options with the SDK's own option type.** SDK majors rename and drop
+  options; an untyped options object makes a removed option a silent no-op. Typed, it fails the
+  build.
+- **Re-read the privacy defaults on every SDK major.** Defaults can flip to *collecting* user
+  info (IP), cookies, headers and request bodies. Set every data-collection category
+  explicitly to the restrictive value, scrub events in `beforeSend` anyway, and enable the
+  tracker's server-side "don't store IP addresses" option — a health or finance app must not
+  ship personal data to a third-party processor by default.
+
+Also watch the tracker's **quota**: one repeating error can spend a free plan's monthly
+allowance in hours, after which every project's errors are dropped and every alert goes quiet.
+Check usage after setup, and guard against bursts (server-side rate limits where the plan
+allows, or dedupe in `beforeSend`).
+
 ---
 
 ## Health check endpoint

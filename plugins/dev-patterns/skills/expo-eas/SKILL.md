@@ -17,6 +17,9 @@ anything here. Gotchas that apply to any project:
 - **Two ways to inject env vars — know which one the project uses.** Either literal `env`
   blocks per profile in `eas.json` (e.g. each profile sets `EXPO_PUBLIC_API_URL` directly), or
   an `APP_ENV` key branched on in `app.config.ts` (template below). Don't mix them silently.
+  Either way, an `EXPO_PUBLIC_*` value only reaches the bundle where the code spells out
+  `process.env.EXPO_PUBLIC_X` literally (see `dev-patterns:logging-observability` → "Sentry in the
+  clients").
 - **EAS Environments (`eas env:*`) are a separate, easy-to-confuse mechanism.** `eas update
   --environment <name>` / a build pulls vars from a named EAS Environment ONLY if the invoking
   profile (or an explicit `--environment` flag) references that name. If no profile does,

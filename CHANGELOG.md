@@ -11,6 +11,18 @@
   exceptions. Found by an audit where ~40 cross-module reads were almost all such aggregators,
   and per-module query facades would have been ceremony.
 - **`clean-architecture/domain-services`** — the module boundary rule points to that exception.
+- **`logging-observability`** — new "Error tracking in client apps": prove the tracker's config
+  reached the shipped artifact (not only the tests), type the SDK options with the SDK's own
+  type, re-read privacy defaults on every SDK major, and watch the tracker's quota. From a real
+  rollout where Sentry shipped switched off, then collecting IPs, then blind on a spent quota.
+
+### `dev-patterns`
+
+- **`logging-observability`** — new "Sentry in the clients — Next.js and Expo": public env vars
+  are inlined only when spelled out literally; `@sentry/nextjs` 11 replaced `sendDefaultPii` with
+  `dataCollection` (restrictive baseline included); wiring without the wizard; the Expo config
+  plugin is only for source maps; reading a `429 error_usage_exceeded`.
+- **`expo-eas`** — the env-var gotcha points to the literal-spelling rule.
 
 ## v1.0.1
 
