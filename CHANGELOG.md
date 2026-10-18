@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## v1.0.2
+
+Lessons from two more rounds of a real project: an aggregator-module exception to the
+cross-module read rule, and error tracking in client apps (web and mobile).
 
 ### `dev-core`
 
