@@ -122,6 +122,24 @@ Give every app `"type-check": "tsc --noEmit"` and confirm the turbo summary list
 them (e.g. `Tasks: 5 successful, 5 total`). For an Expo app with typed routes, generate
 the route types first — see `expo-router` §21.
 
+**A local type-check that passes is not proof CI's will — framework-generated types.**
+Some frameworks write types into gitignored folders only when their dev server or build
+runs, and the app's `tsconfig` includes them. On a dev machine they exist; on CI's fresh
+checkout they don't:
+- **Next.js (App Router):** `next dev`/`next build` generate `.next/types` — including
+  globals such as `RouteContext<'/api/x/[...path]'>`, `PageProps` and `LayoutProps`.
+  Code using them passes `tsc --noEmit` locally and fails CI with `Cannot find name
+  'RouteContext'`. Type the handler's context explicitly
+  (`{ params: Promise<{ path: string[] }> }`) or run `next typegen` before `tsc` in the
+  `type-check` script.
+- **Expo Router typed routes:** same trap with `.expo/types` — `expo-router` §21.
+
+Before pushing a change that touches such code, type-check the way CI does, without the
+generated folder — e.g. a throwaway `tsconfig` **inside the app** (so `@types/*` still
+resolve) that `extends` the real one and excludes `.next`:
+`{ "extends": "./tsconfig.json", "exclude": ["node_modules", ".next"], "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"] }`.
+Don't delete `.next` to test this while `next dev` is running — it breaks the dev server.
+
 ---
 
 ## Deploy order

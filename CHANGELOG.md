@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.0.3
+
+### `dev-patterns`
+
+- **`github-actions-monorepo`** — "Type check" gains a warning on framework-generated types:
+  Next.js writes `.next/types` (globals like `RouteContext`, `PageProps`) and Expo Router
+  `.expo/types` only when their dev server or build runs, so a local `tsc --noEmit` can pass
+  while CI's fresh checkout fails. Type the context explicitly or generate the types in the
+  script, and type-check without the generated folder before pushing. From a real PR whose
+  proxy route used `RouteContext`: green locally, `Cannot find name 'RouteContext'` in CI.
+
 ## v1.0.2
 
 Lessons from two more rounds of a real project: an aggregator-module exception to the
