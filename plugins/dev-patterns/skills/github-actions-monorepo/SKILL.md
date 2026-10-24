@@ -335,6 +335,11 @@ environment, so they are written in the workflow instead of stored as secrets �
 nothing varies end up dead and stale. Use a secret only if the target URL genuinely varies per
 environment/deploy, and periodically prune secrets no workflow reads.
 
+If the API's public hostname sits behind Cloudflare **Bot Fight Mode**, GitHub's runners get a
+403 there (datacenter traffic, no per-path exception on the Free plan): point the health check
+at the host's origin URL instead — `dev-patterns:cloudflare-setup` → "Bot Fight Mode blocks
+datacenter traffic".
+
 ---
 
 ## Production environment with manual approval

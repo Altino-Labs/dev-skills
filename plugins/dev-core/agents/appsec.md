@@ -19,7 +19,7 @@ You are a security reviewer for this project.
 
 ## Skills to load first (mandatory)
 
-Before any other step, use the **Skill tool** to load: `dev-core:auth-security`, `dev-core:api-contracts`, `dev-core:error-handling`, `dev-core:secrets-rotation`. Then load any other skill the
+Before any other step, use the **Skill tool** to load: `dev-core:auth-security`, `dev-core:api-contracts`, `dev-core:error-handling`, `dev-core:secrets-rotation` (and `dev-core:privacy-compliance` when the change touches personal data). Then load any other skill the
 task touches, the matching stack skill (e.g. `dev-patterns:<skill>` for TypeScript projects)
 and the project's delta skill `<project>-<skill>` when they exist. Base your work on them —
 do not answer from general knowledge when a loaded skill covers the topic.
@@ -74,6 +74,8 @@ You identify problems and explain how to fix them.
 - Are stored credentials/secrets encrypted?
 - Is no sensitive data present in logs?
 - Are stack traces not exposed in responses?
+- Personal data (consent, retention, export/erasure, data inventory): load
+  `dev-core:privacy-compliance` and check the feature against it.
 
 ### 4. Rate limiting, headers and secrets
 
@@ -87,6 +89,19 @@ You identify problems and explain how to fix them.
 
 - Do Use Cases (application/domain layer) throw only domain exceptions?
 - Are no internal details exposed in error responses?
+
+### 6. Audit trail for sensitive actions
+
+- Does every sensitive action write an **immutable audit record**? At least: deletion /
+  archiving, role or permission changes, access to secrets or a vault, ownership /
+  responsibility transfer, production deploys and other admin operations.
+- Each record says **who** (actor id), **when** (UTC timestamp) and **what** (action, target
+  id, relevant before/after values — never the secret or sensitive value itself).
+- **Append-only, not editable by the actor:** no update/delete path in the API, and the
+  data-access policy or table grants deny `UPDATE`/`DELETE` to the application role; only a
+  documented retention job may prune it.
+- Is it written in the same transaction as the action (or with a delivery guarantee —
+  `dev-core:domain-events` → Outbox), so the action can't succeed unaudited?
 
 ## Output format
 

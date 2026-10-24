@@ -515,25 +515,64 @@ the process aborts with missing environment variable errors.
 
 ## Filtering `timestamptz` by local calendar date — `utcRangeForLocalDate`
 
-When a controller accepts `?date=YYYY-MM-DD` to filter a `timestamptz` column, it must also
-accept `?tz=` (the user's IANA timezone) and compute the UTC bounds dynamically. Never
-hardcode an offset like `-03:00` — it breaks for any user outside that timezone.
+Which zone a calculation uses (the subject's — whose schedule it is — vs the viewer's), and why
+the database stays UTC: `dev-core:date-time`. This section is the NestJS wiring. Never hardcode
+an offset like `-03:00` — it breaks for anyone outside that zone and ignores DST.
+
+**The zone travels in a header, not a query param.** Every client call carries
+`X-Timezone: <IANA name>` (the zone the user declared in their profile), set once in the
+shared HTTP client — not a `?tz=` added (or forgotten) per endpoint. A web proxy forwards it.
+
+```typescript
+// shared/http/request-timezone.ts
+export const TIMEZONE_HEADER = 'x-timezone';
+// A zone NAME only: recent Intl also accepts fixed offsets like "-03:00", which ignore DST
+const IANA_NAME = /^[A-Za-z][A-Za-z0-9_+\-]*(\/[A-Za-z0-9_+\-]+)*$/;
+
+export function timezoneFromHeader(value: string | string[] | undefined): string {
+  const raw = (Array.isArray(value) ? value[0] : value)?.trim();
+  if (!raw) return FALLBACK_TIMEZONE;   // only for client builds older than the header — see below
+  if (IANA_NAME.test(raw)) {
+    try {
+      // validates against the runtime's zone database and canonicalizes the spelling
+      return new Intl.DateTimeFormat('en-US', { timeZone: raw }).resolvedOptions().timeZone;
+    } catch { /* unknown zone → 400 below */ }
+  }
+  throw new InvalidValueException('INVALID_TIMEZONE', 'Invalid time zone.', 400,
+    [{ field: 'X-Timezone', message: 'Must be an IANA zone name' }]);
+}
+
+export const RequestTimezone = createParamDecorator((_: unknown, ctx: ExecutionContext) =>
+  timezoneFromHeader(ctx.switchToHttp().getRequest().headers[TIMEZONE_HEADER]));
+```
+
+- Offsets (`-03:00`, `GMT-3`) and unknown names → **400**, raised where the zone is used (the
+  decorator), not on routes that ignore it.
+- A missing header falls back to a documented default **only** to keep already-shipped client
+  builds working; new clients always send it, and tests cover a zone other than the default.
+- CORS: `@fastify/cors` reflects requested headers when `allowedHeaders` is unset; if the
+  project sets it, add `X-Timezone`.
+- **Routes about a subject that has its own zone** (a patient, a store, a team) use the
+  subject's stored zone — loaded by the guard that already fetches the membership, exposed via
+  a decorator such as `@SubjectTimezone()` — not the header. The header is the viewer's zone.
+- **Scheduled jobs have no request and no header:** they read the stored zone of each subject
+  (and of each recipient, for personal reminder preferences) from the database, in bulk.
 
 **Controller pattern:**
 ```typescript
 @Get('resource')
 async list(
   @Param('resourceId') resourceId: string,
+  @RequestTimezone() tz: string,          // or @SubjectTimezone() on subject routes
   @Query('date') date?: string,
-  @Query('tz') tz?: string,
 ) {
   return this.listUseCase.execute(resourceId, date, tz);
 }
 ```
 
-**Use case pattern:**
+**Use case pattern** — the zone is a required argument, never a default inside the use case:
 ```typescript
-async execute(resourceId: string, date?: string, tz = process.env.APP_DEFAULT_TZ ?? 'UTC') {
+async execute(resourceId: string, date: string | undefined, tz: string) {
   if (date) {
     const { start, end } = utcRangeForLocalDate(date, tz);
     return this.repo.findByResource(resourceId, { start, end });
@@ -544,34 +583,43 @@ async execute(resourceId: string, date?: string, tz = process.env.APP_DEFAULT_TZ
 
 **Helper function — no external libraries required:**
 ```typescript
-function utcRangeForLocalDate(dateStr: string, tz: string): { start: string; end: string } {
-  // Derive the UTC offset by comparing noon UTC with its local representation.
-  // Using noon avoids DST boundary edge cases that affect midnight.
-  const noonUtc = new Date(`${dateStr}T12:00:00Z`);
-  const localNoonStr = noonUtc.toLocaleString('sv-SE', { timeZone: tz }); // "YYYY-MM-DD HH:MM:SS"
-  const localNoon = new Date(localNoonStr.replace(' ', 'T') + 'Z'); // parse as UTC to get ms value
-  const offsetMs = noonUtc.getTime() - localNoon.getTime(); // positive for UTC- zones (e.g. UTC-3 = +3h)
+const DAY_MS = 86_400_000;
 
-  const startMs = new Date(`${dateStr}T00:00:00Z`).getTime() + offsetMs;
+function utcRangeForLocalDate(dateStr: string, tz: string): { start: string; end: string } {
+  // Each end computed on its own: a DST-change day is 23 or 25 hours long, never "start + 24h"
+  const nextDay = new Date(Date.parse(`${dateStr}T00:00:00Z`) + DAY_MS).toISOString().slice(0, 10);
   return {
-    start: new Date(startMs).toISOString(),                        // local midnight in UTC
-    end:   new Date(startMs + 24 * 60 * 60 * 1000 - 1).toISOString(), // local 23:59:59.999 in UTC
+    start: new Date(startOfLocalDayMs(dateStr, tz)).toISOString(),     // local day start in UTC
+    end:   new Date(startOfLocalDayMs(nextDay, tz) - 1).toISOString(), // local 23:59:59.999 in UTC
   };
+}
+
+// First instant whose local date is dateStr. Tries the zone's offset 12 h before and 12 h after
+// that wall-clock midnight (they differ only around a DST switch) and keeps the earliest
+// candidate that really falls on dateStr — also right when midnight itself is skipped by DST.
+function startOfLocalDayMs(dateStr: string, tz: string): number {
+  const wallMs = Date.parse(`${dateStr}T00:00:00Z`);
+  const localDate = (ms: number) => new Date(ms).toLocaleDateString('sv-SE', { timeZone: tz });
+  const offsetAt = (ms: number) => // positive for UTC- zones (UTC-3 → +3 h)
+    ms - Date.parse(new Date(ms).toLocaleString('sv-SE', { timeZone: tz }).replace(' ', 'T') + 'Z');
+  const candidates = [wallMs + offsetAt(wallMs - DAY_MS / 2), wallMs + offsetAt(wallMs + DAY_MS / 2)];
+  return Math.min(...candidates.filter((ms) => localDate(ms) === dateStr));
 }
 // UTC-3 example: date="2026-06-25", tz="America/Argentina/Buenos_Aires"
 //   → start: "2026-06-25T03:00:00.000Z"  end: "2026-06-26T02:59:59.999Z"
 // UTC+5:30 example: date="2026-06-25", tz="Asia/Kolkata"
 //   → start: "2026-06-24T18:30:00.000Z"  end: "2026-06-25T18:29:59.999Z"
+// DST day (23 h): date="2026-03-29", tz="Europe/Lisbon"
+//   → start: "2026-03-29T00:00:00.000Z"  end: "2026-03-29T22:59:59.999Z"
 ```
 
 **When to apply:** any use case that filters `timestamptz` rows by calendar day
 (daily schedules, metrics by date, history grouped by day). A plain `date` column type
 (e.g. `occurred_on DATE`) does not need this — filter with `.eq('occurred_on', dateStr)`.
 
-**The `tz` default** is a backend fallback only, for whatever timezone makes sense as
-this project's default. The frontend must always send `tz` explicitly — relying on
-the backend default for every request hides per-user timezone bugs until someone
-outside that default zone hits them.
+**The fallback zone** exists only for old client builds. Relying on it hides per-user zone
+bugs until someone outside that zone hits them — don't let new code (helpers with a default
+`tz` parameter, jobs) lean on it.
 
 ## Deactivate / reactivate — always two separate POST endpoints
 

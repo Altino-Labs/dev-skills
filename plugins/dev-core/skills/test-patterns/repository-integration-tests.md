@@ -1,7 +1,8 @@
 # Repository Integration Tests
 > Sub-file of the `dev-core:test-patterns` skill. Read when writing integration tests for
 > repository implementations — verifying that production repositories honor the same contract
-> as their in-memory fakes (LSP compliance). Examples are framework-free TypeScript; `db` stands
+> as their in-memory fakes (LSP compliance) — and database privilege tests (policies, grants,
+> privileged functions, per role). Examples are framework-free TypeScript; `db` stands
 > for the stack's database test client — the concrete setup (client, runner config, local
 > database) lives in the stack plugin (e.g. `dev-patterns:test-patterns`).
 
@@ -144,6 +145,46 @@ Before committing any repository implementation, verify:
 
 **Rule:** if a test here fails while the unit test against the fake passes → the fake is wrong.
 Fix the fake first (it violates LSP), then re-run the integration test.
+
+---
+
+## Database privilege tests
+
+Access rules that live in the database — row-level policies, `GRANT`/`REVOKE` on tables and
+functions, privileged (security-definer) functions — are invisible to unit tests and to
+repository tests that connect as a privileged role. Test them as the roles that really call
+the database:
+
+```typescript
+// Runs against a local database with every migration applied — never a shared one
+describe('database privileges', () => {
+  it('anonymous role cannot read orders', async () => {
+    await expect(asAnon.select('orders')).rejects.toThrow(/permission denied/);
+  });
+
+  it('authenticated user sees only their tenant rows', async () => {
+    const rows = await asUser(userOfTenantA).select('orders');
+    expect(rows.every((r) => r.tenant_id === tenantA)).toBe(true);
+  });
+
+  it('application roles cannot execute the privileged helper directly', async () => {
+    await expect(asUser(userOfTenantA).rpc('internal_reassign_orders', {}))
+      .rejects.toThrow(/permission denied/);
+  });
+
+  it('privileged function rejects a caller who is not a member', async () => {
+    await expect(asUser(outsider).rpc('archive_tenant_order', { orderId }))
+      .rejects.toThrow(/not a member/);
+  });
+});
+```
+
+- **Enumerate, don't sample:** list every table and every privileged function from the
+  database catalog and assert the expected grant for each role, so a new table or function
+  without its policy/revoke fails the suite instead of passing unnoticed.
+- **CI:** a workflow that starts the database, applies every migration from empty and runs this
+  suite on every PR touching the migrations folder (path-filtered). Keep it out of the default
+  unit-test command so `test` stays fast, and run it locally before pushing a migration.
 
 ---
 
