@@ -59,6 +59,28 @@ Security Level:        Medium
 Browser Integrity Check: enabled
 ```
 
+### Bot Fight Mode blocks datacenter traffic
+
+Bot Fight Mode answers 403 (or a challenge) to traffic from datacenter IPs — **including your
+own** CI runners (GitHub Actions), serverless functions (Vercel, Lambda, Cloud Run jobs) and
+server-to-server calls. On the Free plan it has **no per-path or per-IP exception** (WAF skip
+rules don't apply to it), so `/health` can't be carved out. Browsers and phones are fine;
+monitoring services may or may not be — test each one.
+
+- **Deploy health checks and server-to-server calls target the origin URL** (e.g. the host's
+  own `*.run.app` / `*.fly.dev` / `*.onrender.com` address), not the proxied hostname — e.g. a
+  web app's server-side API proxy uses a server-only `API_ORIGIN_URL`.
+- **That origin URL is now public and bypasses Cloudflare** (rate limits, WAF, and a trusted
+  `X-Forwarded-For`). Protect it: the edge (a Worker, or a Transform Rule) **injects a secret
+  origin-auth header** on every request, overwriting any incoming value; the API rejects
+  requests without it (403) except the exact liveness path and any route with its own
+  authentication (e.g. an OIDC-verified cron tick). The few server-side callers that go
+  direct send the same header. Roll it out in report-only mode first, and make the API refuse
+  to start in production without the secret. Rotate it like any shared secret
+  (`dev-core:secrets-rotation`).
+- Alternatives when the plan allows: Super Bot Fight Mode with a skip rule, or Cloudflare
+  Tunnel / authenticated origin pulls so the origin accepts only Cloudflare.
+
 ---
 
 ## Rate limiting via firewall rules
@@ -134,7 +156,8 @@ Or add directly on the server (NestJS interceptor) — preferable to avoid relyi
 - [ ] SSL: Full (strict)
 - [ ] Always HTTPS: enabled
 - [ ] HSTS: enabled
-- [ ] Bot Fight Mode: enabled
+- [ ] Bot Fight Mode: enabled — CI health checks and server-to-server calls go to the origin URL,
+      which is protected by an edge-injected origin-auth header
 - [ ] Rate limiting on authentication endpoints
 - [ ] Email records without proxy (gray icon)
 - [ ] SPF, DKIM, DMARC records configured

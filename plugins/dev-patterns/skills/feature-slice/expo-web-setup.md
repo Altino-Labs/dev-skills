@@ -234,6 +234,8 @@ cd apps/mobile && npx expo start --web --port 8081 --clear
 
 **Critical:** if `expo start` shows "Starting project at /...monorepo-root", Metro loads the wrong project — always confirm the CWD.
 
+**Native:** once the app has a native module Expo Go doesn't ship, use a development build (`expo-dev-client`, `npx expo run:ios`, then `expo start --dev-client`), not Expo Go. Metro may miss edits: restart with `--clear` and confirm a full bundle in its log before every manual check. Details: `SKILL.md` → "Development build, not Expo Go".
+
 ---
 
 ## pnpm 11 — `allowBuilds` must include `@swc/core`

@@ -39,8 +39,10 @@ Who installs which:
    ask for an agent by name — e.g. "use the `dev-core:architect` agent to plan the orders
    module" — or run the review gate before merging ("run `dev-core:pre-merge`").
 
-`dev-patterns:bootstrap-project` is a fuller setup guide, but it assumes the TypeScript stack of
-`dev-patterns`. For any other stack, start from the templates below.
+For a new project, run `dev-core:bootstrap-project`: it indexes the spec, records the stack
+choice as an ADR, writes `AGENTS.md` / `CLAUDE.md` / the constitution from its templates, and sets
+up CI and infrastructure one confirmed step at a time. On the TypeScript stack it hands the
+scaffold to `dev-patterns:bootstrap-project`. The minimal templates below still work on their own.
 
 ### Templates (any stack)
 
@@ -93,12 +95,13 @@ The `dev-core` examples are TypeScript read as pseudo-code. Common translations:
 | Event-name constants | `StrEnum` | `enum` | `enum` / `const` | `const` |
 | Migrations | Alembic / Django | Flyway / Liquibase | EF Core migrations | golang-migrate / goose |
 
-## What's included (v1.0.1)
+## What's included (v1.1.0)
 
 ### `dev-core` (`plugins/dev-core/`)
 
-**Skills** (12): `api-contracts`, `auth-security`, `clean-architecture`, `domain-events`,
-`error-handling`, `git`, `logging-observability`, `migrations`, `pre-merge`,
+**Skills** (16): `api-contracts`, `audit`, `auth-security`, `bootstrap-project`,
+`clean-architecture`, `date-time`, `domain-events`, `error-handling`, `git`,
+`logging-observability`, `migrations`, `pre-merge`, `privacy-compliance`,
 `resilience-patterns`, `secrets-rotation`, `test-patterns` — referenced as `dev-core:<skill>`.
 
 **Agents** (8): `appsec`, `architect`, `backend-developer`, `dba`, `devops`,

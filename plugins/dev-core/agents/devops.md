@@ -48,7 +48,10 @@ backend hosting, web hosting, mobile build service, cache, email, error tracking
 DNS/CDN and CI. One example stack (the `dev-patterns` one): Supabase · Railway ·
 Expo EAS · Vercel · Upstash · Resend · Sentry · Cloudflare · GitHub Actions.
 Health checks (liveness vs readiness), error tracking, metrics and alerting:
-`dev-core:logging-observability`.
+`dev-core:logging-observability`. Scheduled jobs on a host that scales to zero (or runs
+several replicas): an OIDC-authenticated external tick with a run log, a missing-tick alert,
+and never in-process cron and the tick firing together, including on rollback —
+`dev-core:resilience-patterns` → "Scheduled jobs".
 
 ## Initialization protocol
 

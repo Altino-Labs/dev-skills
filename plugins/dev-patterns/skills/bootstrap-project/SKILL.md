@@ -1,288 +1,63 @@
 ---
 name: bootstrap-project
 description: >
-  Step-by-step guide to set up a new project using the dev-patterns plugin plus a
-  project-local .claude/ folder. Follow the phases in order. Each phase has a validation checkpoint before
-  proceeding to the next.
+  The TypeScript-stack phase of a new project's bootstrap, run from dev-core:bootstrap-project
+  when its stack ADR picks the dev-patterns stack (NestJS/Fastify, Supabase/Postgres,
+  Expo/React Native, Next.js, pnpm + Turborepo). Covers the PROJECT.md sections the
+  dev-patterns skills read, the monorepo scaffold (layout, package scope, test fakes, dev
+  dependencies) and the stack's service-by-service provisioning, each with a checkpoint.
 ---
 
-# Bootstrap — New Project Setup
+# Bootstrap — TypeScript stack phase
+
+> **Run `dev-core:bootstrap-project` first.** It owns everything stack-agnostic: ingesting the
+> spec, choosing the stack as an ADR, installing the plugins and the project's `.claude/`
+> layer, the `AGENTS.md` / `CLAUDE.md` / constitution / `SESSION.md` templates, the repository
+> and CI baseline, and the infrastructure order (staging first, production deferred, backups
+> with a restore drill, secrets inventory). This skill is the **stack phase** it calls when
+> ADR-001 chose the `dev-patterns` stack: it replaces "Scaffold" in that skill's Phase 4 and
+> adds the concrete services to its Phase 5. Don't repeat the dev-core steps here.
 
 ## Overview
 
 ```
-Phase 1 — Install plugin + local .claude/  ~10 min
-Phase 2 — Define the project      ~60 min
-Phase 3 — Scaffold the monorepo   ~20 min
-Phase 4 — Provision infrastructure ~90 min
-Phase 5 — Validate                ~10 min
+Step 1 — PROJECT.md sections the stack skills read   (during dev-core Phase 3)
+Step 2 — Scaffold the monorepo                       (dev-core Phase 4, "Scaffold")
+Step 3 — Stack services                              (dev-core Phase 5, in its order)
+Step 4 — Validate the stack                          (with dev-core Phase 6)
 ```
-
-Total: ~3 hours for a fully operational project with AI agents ready to work.
 
 ---
 
-## Phase 1 — Install the plugin and create the local `.claude/`
+## Step 1 — `PROJECT.md` sections the stack skills read
 
-The framework is split in two layers:
+`PROJECT.md` (or its split into `project/*.md` — `ADR.md`, `MODULES.md`, `DATA-MODEL.md`,
+`API.md`, `INFRA.md`, `UX.md`…, with `PROJECT.md` as the index) is described in
+`dev-core:bootstrap-project` → Phase 3. The `dev-patterns` skills and the `dev-core` agents
+look for these sections, wherever they live:
 
-| Layer | Where | What lives there |
+| Section | Read by | Notes |
 |---|---|---|
-| **Shared** | the `dev-core` and `dev-patterns` Claude Code plugins | `dev-core`: stack-agnostic skills (`dev-core:<skill>` — `git`, `pre-merge`, `resilience-patterns`, `secrets-rotation`), the 8 role agents (`dev-core:<agent>` — `architect`, `tech-lead`, `backend-developer`, `frontend-developer`, `dba`, `devops`, `qa`, `appsec`) and the safety hooks; `dev-patterns`: the TypeScript stack skills (`dev-patterns:<skill>`) and the lint hook |
-| **Project** | the repo's own `.claude/` | constitution, general context, project-specific delta skills, project-only agents, per-agent context files |
+| Overview | every agent | 2–3 sentences: what, for whom, business model |
+| ADRs | `dev-core:tech-lead`, `dev-core:architect` | Nygard format (Context / Decision / Consequences); ADR-001 = the stack |
+| Modules | `dev-core:architect`, `dev-core:domain-events` (aggregator modules) | every feature module |
+| Aggregate map (+ context map at 8+ roots) | `dev-core:clean-architecture` | root, entities inside, invariants |
+| User model + permissions matrix | `dev-patterns:auth-security`, `dev-core:appsec` | role × operation; every endpoint maps to a row |
+| Business rules | every implementer | per module |
+| Enums | `dev-core:dba`, `dev-patterns:migrations` | the **only** source of enum values |
+| Domain events catalog | `dev-patterns:domain-events` | name, payload, subscribers |
+| API endpoints | `dev-core:backend-developer` | method, path, use case, permission |
+| Scheduled jobs and alerts | `dev-patterns:notifications-cron`, `dev-patterns:jobs-queues` | or "No scheduled jobs planned" |
+| Data model | `dev-core:dba` | kept in sync with migrations |
+| Infrastructure | `dev-core:devops` | summary; details in `INFRA.md` |
+| UX requirements | `dev-core:frontend-developer`, `dev-patterns:mobile-ux-patterns` | **optional** — the project's own UX decisions, when it has any; the skills don't impose a house UX |
 
-### 1a. Install the plugins
-
-Inside a Claude Code session at the new project root:
-
-```
-/plugin marketplace add Altino-Labs/dev-skills
-/plugin install dev-core@dev-skills
-/plugin install dev-patterns@dev-skills
-```
-
-Update later with `claude plugin update dev-core` and `claude plugin update dev-patterns`. Never copy plugin skills/agents into
-the project — fix or extend them in the plugin repo so every project benefits.
-
-### 1b. Create the local `.claude/`
-
-```
-.claude/
-├── constitution.md          ← non-negotiable rules for agents (write once; rarely changes —
-│                              the plugin does not ship one)
-├── general-context.md       ← this project's context, identity model, vocabulary, import scope
-├── README.md                ← structure guide for this project's .claude/
-├── settings.json            ← permissions, project-only hooks (enable dev-core + dev-patterns here;
-│                              the generic safety hooks ship with dev-core — don't copy them)
-├── skills/
-│   └── <project>-<skill>/   ← delta skills — ONLY project-specific additions to a plugin skill
-│       └── SKILL.md
-├── agents/                  ← project-only agents (e.g. tech-lead, backend-developer,
-│                              frontend-developer, dba) — agents whose instructions depend
-│                              on this codebase's real classes/paths
-└── agent-context/
-    └── <agent>.md           ← project-specific rules a PLUGIN agent reads at start
-                               (e.g. agent-context/appsec.md for dev-core:appsec)
-```
-
-**Delta skill convention** — `.claude/skills/<project>-<skill>/SKILL.md`:
-
-```markdown
----
-name: <project>-<skill>
-description: <Project>-specific complement to the dev-patterns:<skill> skill — <what it adds>. Invoke together with dev-patterns:<skill> whenever <same triggers as the plugin skill>.
----
-
-# <Title> — <Project> specifics
-
-> Base pattern: `dev-patterns:<skill>` (load it first). This file only adds what is specific to <Project>; on conflict, this file wins.
-
-## § <heading of the plugin skill section>
-<real paths, table/column names, ADR refs, defaults, decisions, incidents>
-```
-
-Create a delta only when there is real project-specific content (canonical reference files,
-real table names, deliberate deviations from the generic pattern, dated status notes). Don't
-restate the generic pattern. A brand-new project usually starts with **no** deltas — they
-accumulate as decisions are made.
-
-**`agent-context/<agent>.md`** — the plugin agents are generic; anything they must know about
-this project (sensitive data categories, extra review rules, real paths of guards/fakes,
-enum source of truth) goes here. Create one only when needed.
-
-**Project-only agents** — the `dev-core` plugin already ships the 8 standard roles (`architect`,
-`backend-developer`, `frontend-developer`, `dba`, `qa`, `tech-lead`, `appsec`, `devops`);
-customize them through `agent-context/`, not by copying. Write a local agent under
-`.claude/agents/` only for a role the plugin doesn't have. Plugin agents are namespaced
-(`dev-core:<agent>`), so a local agent with the same name does not replace one — it
-shows up as a second agent; avoid that.
-
-### What you must write
-
-The plugin ships no templates for these — write them for this project.
-
-| File | Content |
-|---|---|
-| `constitution.md` | Non-negotiable rules agents must follow (e.g. never commit secrets, confirm destructive/production operations, layer boundaries) |
-| `general-context.md` | "About this project", identity model, domain vocabulary, framework-level conventions |
-| `me.md` (optional, per developer, usually gitignored) | Your name, team, focus and current branch |
-
-### What you must create from scratch
-
-| File | Description |
-|---|---|
-| `PROJECT.md` | Domain, business rules, permissions, enums, events, endpoints, UX spec |
-| `INFRA.md` | Provisioned services, environment variables, bootstrap checklist |
-| `.bootstrap-secrets` | Credentials for provisioning (gitignored — never commit) |
-| `.bootstrap-secrets.example` | Template with keys and no values (committed) |
-
-**Checkpoint 1:** `/plugin` lists `dev-core` and `dev-patterns` as installed and their skills show up as
-`dev-core:<skill>` / `dev-patterns:<skill>`; all local items above exist. Proceed to Phase 2.
+**Checkpoint 1:** the sections above exist (a section may say "N/A" with a reason, never be
+silently missing); `dev-core:architect` can plan the first module from them.
 
 ---
 
-## Phase 2 — Define the project
-
-### 2a. Write `general-context.md`
-
-Start with an "About this project" section — a 3–5 line description:
-- What the system does
-- Who uses it
-- The core multi-tenancy or ownership model (e.g. "multi-tenant by organization")
-- The tech stack (only if different from the default)
-
-Add an "Identity model" section with the project's actual user roles and types.
-
-Add a "Domain vocabulary" table with this project's terms.
-
-Then add the framework-level conventions agents should follow (auth pattern, API response rules,
-commit conventions) — these rarely change once written.
-
----
-
-### 2b. Create `PROJECT.md` — mandatory sections
-
-All sections below are required. Agents will break or produce incorrect output if any is missing.
-
-```markdown
-# PROJECT.md — [Project Name]
-
-## §1 — Overview
-[2-3 sentences: what the system does, who uses it, business model]
-
-## §2 — Architectural Decision Records (ADRs)
-<!-- Promoted from the project's session log / decision notes (if it keeps one).
-     Use the Nygard format: Context / Decision / Consequences.
-     Never write a one-liner here — future agents need the reasoning, not just the title. -->
-
-## ADR-001: [Short imperative title — what was decided]
-
-**Date:** YYYY-MM-DD
-**Status:** Accepted
-
-**Context:**
-[1–3 sentences: what situation or trade-off prompted this decision?]
-
-**Decision:**
-[1 paragraph: what was decided. State as a rule — "We will…" / "X must always…"]
-
-**Consequences:**
-- [What is now required]
-- [What is now forbidden]
-- [What becomes simpler or harder]
-
-## §3 — Modules
-[List all feature modules. Each agent reads this to know the full scope.]
-- auth, users, [domain-module-1], [domain-module-2], ...
-
-## §3b — Aggregate Map
-[List every Aggregate Root with its boundary and key invariants (one row per root: root,
- entities inside the boundary, invariants it enforces). The Aggregate Map prevents Use Cases from crossing aggregate boundaries directly.]
-
-## §3c — Context Map (fill when the system has 8+ aggregate roots)
-[Group aggregates into Bounded Contexts. Shows which modules form a coherent sub-domain
- and how cross-context integration happens — always via Domain Events, never via direct Use Case calls.
- Based on Evans, Domain-Driven Design ch. 10.]
-
-| Bounded Context | Aggregate Roots | Integration with other contexts |
-|---|---|---|
-| [ContextA] | [Root1, Root2] | Publishes [event.name] → [ContextB] subscribes |
-| [ContextB] | [Root3, Root4] | Consumes [event.name] from [ContextA] |
-
-If your system has fewer than 8 aggregate roots, skip this section and write "N/A — single bounded context."
-
-## §4 — User Model
-[Who logs in. What roles/types exist. How identity relates to data access.]
-
-user_type:  [TYPE_A] | [TYPE_B]       ← who the person is
-user_role:  [ROLE_A] | [ROLE_B]       ← what they can do
-
-## §5 — Permissions Matrix
-[Table: role × operation → allowed/denied. Every endpoint maps to a row here.]
-
-| Operation | [ROLE_A] | [ROLE_B] |
-|---|---|---|
-| create X  | ✅        | ❌        |
-| read X    | ✅        | ✅        |
-
-## §6 — Business Rules
-[Module by module. These are the rules agents must not violate.]
-
-### [ModuleName]
-- Rule 1
-- Rule 2
-
-## §7 — Enums
-[CRITICAL: migrations and architecture reviews (DBA / tech-lead agents, if the project has them) use this as the source of truth for all enum values.]
-[Never invent values outside this table.]
-
-| Enum name | Values |
-|---|---|
-| status_enum | ACTIVE \| INACTIVE \| ARCHIVED |
-
-## §8 — Domain Events Catalog
-[Every event the system publishes. `dev-core:domain-events` references this.]
-
-| Event name | Payload fields | Subscribers |
-|---|---|---|
-| entity.created | id, created_by, occurred_at | SendWelcomeEmailSubscriber |
-
-## §9 — API Endpoints
-[Every planned route. Whoever implements the backend (agent or human) uses this to know what to build.]
-
-| Method | Path | Use Case | Permission |
-|---|---|---|---|
-| POST | /api/v1/[resource] | CreateResourceUseCase | [ROLE_A] |
-
-## §10 — Scheduled Jobs and Alerts
-[Cron jobs, alert triggers, push notifications. notifications-cron skill references this.]
-If not applicable: "No scheduled jobs planned."
-
-## §11 — Data Model
-[Tables, key fields, relationships. Keep in sync with migrations.]
-
-## §12 — Infrastructure
-[Summary of services. Full details in INFRA.md.]
-
-## §13 — UX Requirements
-[Screen-by-screen UX spec. Frontend implementers and the mobile-ux-patterns skill reference this.]
-
-### §13.1 — List-first pattern
-[Confirm all list screens follow: scrollable list → + button top-right → empty state → modal form]
-
-### §13.5 — Section title standard
-[Confirm font size, weight, color for section titles across all screens]
-
-### §13.6 — No duplicate title
-[Confirm the tab header is the only place a screen title appears]
-
-### [ScreenName]
-[UX description: what the user sees, what they can do, role-based visibility]
-```
-
----
-
-### 2c. Fill `me.md` (optional)
-
-```
-Name:         [your name]
-Team:         [backend | frontend | fullstack | devops]
-Focus:        [project name]
-Architecture: [e.g. NestJS + Fastify · Expo SDK + expo-router · Supabase · Turborepo pnpm]
-Branch:       [current branch]
-Task:         [what you are working on]
-```
-
-`Architecture` helps agents avoid mixing up stack-specific patterns when multiple projects
-are open simultaneously. One line is enough — list runtime, frontend framework, database and
-monorepo tool.
-
-**Checkpoint 2:** `general-context.md` and `PROJECT.md` (all §1–§13) are filled (plus `me.md`, if used).
-Have a colleague, `dev-core:tech-lead` or `dev-core:architect` review `PROJECT.md` for missing sections before proceeding.
-
----
-
-## Phase 3 — Scaffold the monorepo
+## Step 2 — Scaffold the monorepo
 
 ### Directory structure
 
@@ -302,7 +77,8 @@ Have a colleague, `dev-core:tech-lead` or `dev-core:architect` review `PROJECT.m
 │   │       ├── factories/        ← EntityFactory per domain module
 │   │       ├── helpers/          ← assertSnakeCase, db seed helpers
 │   │       └── contracts/        ← one contract spec per controller
-│   └── mobile/       ← Expo SDK + expo-router
+│   ├── mobile/       ← Expo SDK + expo-router
+│   └── admin-web/    ← Next.js (optional — e.g. an admin panel)
 ├── packages/
 │   ├── shared-types/ ← DTOs, enums, interfaces
 │   ├── utils/        ← pure functions, date helpers
@@ -313,7 +89,7 @@ Have a colleague, `dev-core:tech-lead` or `dev-core:architect` review `PROJECT.m
 │   ├── seed-essential.sh ← staff/admin account only — the only one safe to run
 │   │                        against staging/production too (see migrations skill)
 │   └── seed.sh           ← local-only: runs seed-essential.sh, then adds demo data
-├── .claude/          ← project-local layer (constitution, context, deltas, agents, agent-context)
+├── .claude/          ← project layer — see dev-core:bootstrap-project, Phase 2
 ├── turbo.json
 ├── pnpm-workspace.yaml
 └── package.json
@@ -335,10 +111,16 @@ packages:
   "tasks": {
     "build": { "dependsOn": ["^build"], "outputs": ["dist/**"] },
     "test":  { "dependsOn": ["^build"] },
+    "lint":  {},
+    "type-check": { "dependsOn": ["^build"] },
     "dev":   { "cache": false, "persistent": true }
   }
 }
 ```
+
+Every app and package defines `lint`, `type-check` and `test` scripts — turbo skips an app
+without the script silently (`dev-core:bootstrap-project` → CI baseline;
+`dev-patterns:github-actions-monorepo`).
 
 **`packages/shared-types/package.json`**
 ```json
@@ -350,22 +132,17 @@ packages:
 }
 ```
 
-Replace `@app` with your actual package scope (e.g. `@acme`, `@myproject`).
+Replace `@your-app` with your actual package scope (e.g. `@acme`, `@myproject`).
 
-**Required dev dependencies — add to `apps/api/package.json`**
+**Dev dependencies of `apps/api`** — install the **current major** of each, with
+`pnpm --filter api add -D …` (never a bare install at the root):
 
-```json
-{
-  "devDependencies": {
-    "@golevelup/ts-jest": "^0.5.0",
-    "@stryker-mutator/core": "^8.0.0",
-    "@stryker-mutator/jest-runner": "^8.0.0"
-  }
-}
-```
-
-`@golevelup/ts-jest` provides `createMock<T>()` used in every Use Case unit test (see `dev-patterns:test-patterns`).
-`@stryker-mutator/*` is required for mutation testing before merging domain code (see `dev-patterns:test-patterns` → `stryker-mutation.md`).
+- `@golevelup/ts-jest` (or Vitest's `vi.fn` helpers on the ESM + Vitest track) — `createMock<T>()`
+  for Use Case unit tests (`dev-patterns:test-patterns`).
+- `@stryker-mutator/core` + the runner for your test runner — mutation testing, **report-only
+  first**: a scheduled workflow with no `thresholds.break`, never a merge gate until the scores
+  have settled (`dev-core:test-patterns` → "Mutation testing";
+  `dev-patterns:test-patterns` → `stryker-mutation.md`).
 
 **Seed the `test/fakes/` directory immediately** — these fakes are shared across all modules and must exist before writing the first test:
 
@@ -379,7 +156,7 @@ apps/api/test/fakes/
 Copy the canonical implementations from `dev-core:test-patterns` — `contract-event-tests.md`
 ("Event Bus test fakes") and `mock-patterns.md` ("IUnitOfWork test pattern").
 
-**Complete scope update checklist — every occurrence must match or the build breaks silently:**
+**Package scope checklist — every occurrence must match or the build breaks silently:**
 
 | File | What to change |
 |---|---|
@@ -392,90 +169,70 @@ Copy the canonical implementations from `dev-core:test-patterns` — `contract-e
 | `.claude/general-context.md` | Import examples (`import { … } from '@acme/shared-types'`) |
 
 **Plugin files — do NOT modify per project:**
-the `dev-patterns` skills and agents use `@app/` as an illustrative placeholder in code
-snippets. Agents read `.claude/general-context.md` as the authority for imports and will use
-whatever scope is declared there. No delta skill is needed just for the package scope.
+the `dev-patterns` skills use `@app/` as an illustrative placeholder in code snippets. Agents
+read `.claude/general-context.md` as the authority for imports and will use whatever scope is
+declared there. No delta skill is needed just for the package scope.
 
-**Checkpoint 3:** `pnpm install` runs without errors. `pnpm build` completes on all packages.
+Per-app setup: `dev-patterns:nestjs-fastify` (API), `dev-patterns:feature-slice` (mobile and
+web — including a development build instead of Expo Go once there are native modules),
+`dev-patterns:shared-kernel` (packages).
+
+**Checkpoint 2:** `pnpm install` runs without errors; `pnpm build`, `pnpm lint`,
+`pnpm type-check` and `pnpm test` complete with one task per app/package in turbo's output.
 
 ---
 
-## Phase 4 — Provision infrastructure
+## Step 3 — Stack services
 
-Follow this order — services have dependencies between them.
+Provision in the order of `dev-core:bootstrap-project` → Phase 5 (staging first, production
+deferred), one confirmed step at a time. What each step means on this stack:
 
-### Step 1 — Supabase (database + auth)
-1. Create project at supabase.com
-2. Note: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
-3. Install Supabase CLI: `pnpm add -g supabase`
-4. Link project: `supabase link --project-ref <ref>`
-5. Run skill `supabase-setup` for RLS and Auth configuration
-
-### Step 2 — Railway (API hosting)
-1. Create project and service at railway.app
-2. Connect to the GitHub repository
-3. Set root directory to `apps/api`
-4. Configure environment variables (from `.bootstrap-secrets`)
-5. Run skill `railway-nestjs` for Dockerfile and health check
-
-### Step 3 — GitHub repository + Actions
-1. Create repository (private)
-2. Push initial commit
-3. Add repository secrets (from `.bootstrap-secrets`)
-4. Run skill `github-actions-monorepo` for CI/CD pipelines
-
-### Step 4 — Cloudflare (DNS + SSL)
-1. Add domain to Cloudflare
-2. Point DNS to Railway
-3. Run skill `cloudflare-setup` for SSL, security headers, rate limiting
-
-### Step 5 — Expo EAS (mobile builds)
-1. `npx eas-cli login`
-2. `npx eas-cli build:configure` inside `apps/mobile`
-3. Run skill `expo-eas` for build profiles and OTA config
+| dev-core step | Service | Skill |
+|---|---|---|
+| Database | Supabase project in the region ADR-001 chose; `supabase link`; RLS and Auth config | `dev-patterns:supabase-setup`, `dev-patterns:migrations` |
+| Backups | Confirm the plan's backups; back up Storage files too | `dev-patterns:supabase-setup` |
+| Hosting + deploy | The API on **the container host chosen in the stack ADR** (e.g. Cloud Run, Fly, Render) from the Dockerfile; health checks (liveness vs readiness); graceful shutdown; scheduled jobs via an external tick if the host scales to zero | `dev-patterns:railway-nestjs` (Dockerfile, health, shutdown — portable to any container host), `dev-patterns:jobs-queues` → "Scheduled jobs" |
+| Hosting + deploy | Web apps on their host (e.g. Vercel); public env vars spelled out literally so they are inlined | `dev-patterns:auth-security` (Next.js BFF for an admin app), `dev-patterns:logging-observability` |
+| CI/CD | GitHub Actions: CI on every PR; staging deploy on merge (migrate → API → health check → web / OTA) | `dev-patterns:github-actions-monorepo` |
+| Error tracking | Sentry in the API, Next.js and Expo, privacy defaults on | `dev-patterns:logging-observability` |
+| DNS / edge | Cloudflare: SSL Full (strict), headers; **Bot Fight Mode blocks CI and serverless calls** — health checks and server-to-server calls use the origin URL, protected by an origin-auth header | `dev-patterns:cloudflare-setup` |
+| Mobile builds | Expo EAS: profiles (development / staging / production), channels, OTA | `dev-patterns:expo-eas` |
 
 ### Optional services (add when needed)
 | Service | Skill | When |
 |---|---|---|
 | Upstash Redis | `cache` or `jobs-queues` | When adding caching or async jobs |
 | Resend | `resend-email` | When sending transactional email |
-| Sentry | `dev-core:logging-observability` + `dev-patterns:logging-observability` | Before first staging deploy |
 
-**Checkpoint 4:** API responds at `/health`. Supabase migrations run without error. Mobile app builds locally with `npx expo start`.
+**Checkpoint 3:** the API answers its liveness and readiness routes on staging; Supabase
+migrations apply from an empty database without error; the mobile app runs on a simulator.
 
 ---
 
-## Phase 5 — Validate setup
+## Step 4 — Validate the stack
 
-Run through every item. Setup is complete only when all pass.
-
-### Framework readiness
-- [ ] `PROJECT.md` has all sections §1–§13 filled (no empty sections)
-- [ ] `general-context.md` "About this project" describes this project (not a placeholder)
-- [ ] `me.md`, if used, has real values (not brackets)
-- [ ] Package scope (`@app/`) is consistent across all 4 files that reference it
+Together with the checklist of `dev-core:bootstrap-project` → Phase 6:
 
 ### Code
-- [ ] `pnpm build` — zero TypeScript errors across all workspaces
-- [ ] `pnpm test` — zero failures (even if there are only 2-3 bootstrap tests)
-- [ ] First migration runs with `supabase db push` without error
+- [ ] `pnpm build`, `pnpm lint`, `pnpm type-check`, `pnpm test` — zero errors, one task per app/package
+- [ ] First migration runs with `supabase db push` (and from an empty local database) without error
+- [ ] Package scope (`@your-app/`) is consistent across every file in the checklist above
 
 ### Test infrastructure
 - [ ] `apps/api/test/fakes/strict-event-bus.ts` exists and implements `IEventBus`
 - [ ] `apps/api/test/fakes/capturing-event-bus.ts` exists and implements `IEventBus`
 - [ ] `apps/api/test/fakes/in-memory-unit-of-work.ts` exists and implements `IUnitOfWork`
-- [ ] `@golevelup/ts-jest` is in `devDependencies` — `import { createMock } from '@golevelup/ts-jest'` resolves
+- [ ] The mock helper resolves (`import { createMock } from '@golevelup/ts-jest'`, or the Vitest equivalent)
 - [ ] `apps/api/test/helpers/assert-snake-case.ts` exists (copy from `dev-patterns:test-patterns` → `contract-tests-http.md`)
+- [ ] The mutation-testing workflow exists, scheduled and report-only
 
 ### Infrastructure
-- [ ] API responds at `https://[domain]/health` (or Railway URL if domain not configured yet)
+- [ ] API healthy at its staging URL (custom domain or the host's own URL)
 - [ ] Supabase Auth creates a test user successfully
 - [ ] Mobile app renders the first screen on a simulator
 
 ### Agent readiness
-- [ ] `dev-core` and `dev-patterns` plugins installed; a plugin skill (e.g. `dev-patterns:clean-architecture`) loads
-- [ ] Ask `dev-core:architect` to plan the first module — it must read `PROJECT.md` without errors
-- [ ] Create the first migration (`dev-core:dba` agent, with the `migrations` skill) — it must reference `PROJECT.md §7` enums correctly
-- [ ] `dev-core:appsec` can read the project files (and `.claude/agent-context/appsec.md`, if created) without reporting "file not found"
+- [ ] `dev-patterns` installed; a stack skill (e.g. `dev-patterns:clean-architecture`) loads
+- [ ] `dev-core:dba` creates the first migration with enum values taken from `PROJECT.md`'s enums table
 
-**Setup is complete when all items above are checked.**
+**The stack phase is complete when all items above are checked.**

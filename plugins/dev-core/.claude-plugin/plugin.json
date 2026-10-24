@@ -1,7 +1,7 @@
 {
   "name": "dev-core",
-  "version": "1.0.3",
-  "description": "Stack-agnostic engineering practices for any project: Clean Architecture and tactical DDD, test patterns (fakes, contract and repository integration tests, mutation testing), error handling, database migrations, domain events (outbox, saga), logging/observability, API contracts, auth/security, git conventions, a pre-merge review gate, resilience patterns, secrets rotation, 8 role agents (architect, tech-lead, backend/frontend developer, dba, devops, qa, appsec) that read the project's own stack and rules, and safety hooks that ask before destructive commands and before writing likely secrets.",
+  "version": "1.1.0",
+  "description": "Stack-agnostic engineering practices for any project: Clean Architecture and tactical DDD, test patterns (fakes, contract and repository integration tests, mutation testing), error handling, database migrations, domain events (outbox, saga), logging/observability, API contracts, auth/security, git conventions, a pre-merge review gate, resilience patterns, secrets rotation, time zones (date-time), privacy compliance (GDPR/LGPD, versioned consent), a full-repository audit protocol, a stack-agnostic project bootstrap with context-file templates, 8 role agents (architect, tech-lead, backend/frontend developer, dba, devops, qa, appsec) that read the project's own stack and rules, and safety hooks that ask before destructive commands and before writing likely secrets.",
   "author": {
     "name": "Altino Pavan"
   },

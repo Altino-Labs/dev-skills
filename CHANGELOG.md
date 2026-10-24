@@ -1,5 +1,68 @@
 # Changelog
 
+## v1.1.0
+
+Lessons from a production project's last rounds, promoted so a new project — on any stack —
+starts with them: a stack-agnostic bootstrap with templates, the audit protocol, privacy
+compliance (GDPR/LGPD), the time-zone model, and fixes where the plugins had drifted from
+practice.
+
+### `dev-core`
+
+- **New `bootstrap-project`** — stack-agnostic project bootstrap: index the spec into
+  `docs/SPEC-INDEX.md` (parallel agents for large material, contradictions listed, not guessed),
+  record the stack as ADR-001, install plugins, write durable context (`AGENTS.md`, `CLAUDE.md`,
+  `PROJECT.md`, `SESSION.md`/`ROADMAP.md`), CI baseline covering every app, then infrastructure one
+  confirmed step at a time (backups with a real restore test, secrets-rotation cadence, error
+  tracking with privacy defaults, production deferred behind approval). Ships templates for
+  `AGENTS.md`, `CLAUDE.md`, `constitution.md` (with working agreements), `general-context.md` and
+  `SESSION.md`.
+- **New `audit`** — full-repository audit protocol: dimensions in parallel, one globally numbered
+  findings list persisted and committed before any fix, one issue per finding, PRs batched by
+  dimension, deferrals recorded. Never "fix" a finding by shrinking the docs to fit.
+- **New `privacy-compliance`** — GDPR and LGPD side by side (legal bases incl. health data, rights,
+  DPO, breach notice, transfers), a per-new-field checklist, a go-live checklist and the versioned
+  Terms/Privacy acceptance pattern. Engineering guidance, not legal advice.
+- **New `date-time`** — instants in UTC, the subject's zone apart from the viewer's, IANA names
+  only, the client's zone on every request, scheduled jobs on the stored zone, local-noon
+  backfills, date tests pinned west of UTC.
+- **`git`** — `Closes` once per issue; GitHub ignores negation next to an issue number;
+  `git status --short` right before each commit; check whether the PR merged before *every*
+  commit (was: before pushing); batching rules.
+- **`domain-events`** — time- and level-triggered notifications are scheduled scans of current
+  state, not event subscribers.
+- **`resilience-patterns`** — scheduled jobs on scale-to-zero hosts: an external OIDC-authenticated
+  tick, a schedule registry, leased run log, alerts on job failure and on a missing tick, one mode
+  switch so both never fire. The `devops` agent points to it.
+- **`auth-security`** — Origin/Referer verification as an accepted CSRF defence; host-only cookies;
+  a backend-for-frontend for admin web apps.
+- **`appsec` agent** — immutable audit trail for sensitive actions; loads `privacy-compliance`.
+- **`migrations`** — a CI guard that fails destructive/contract statements without a
+  `-- contract-ok: <reason>` marker.
+- **`test-patterns`** — security boundaries: mocks must still assert tenant/user filters; database
+  privilege tests on a real database in CI.
+
+### `dev-patterns`
+
+- **`bootstrap-project`** — now the TypeScript-stack phase called from `dev-core:bootstrap-project`.
+  No default host (chosen in the stack ADR; Railway no longer suggested), Stryker report-only first,
+  no stale version pins, no copied `.claude/agents/`, UX section optional, `project/*.md` split allowed.
+- **`notifications-cron`** — rewritten around scheduled scans for reminders and level alerts
+  (mark-sent-after-success, per-episode keys); push receipts kept.
+- **`jobs-queues`** — `@nestjs/schedule` with in-process cron switched off when the external tick
+  is on; OIDC guard; shared lease helper.
+- **`nestjs-fastify`** — the zone comes in an `X-Timezone` header with an IANA name (offsets and
+  unknown zones → 400), not `?tz=`; subject routes use the stored zone. `utcRangeForLocalDate`
+  fixed for 23/25-hour DST days.
+- **`feature-slice`** — subject vs viewer zone; `X-Timezone` in the shared HTTP client; a
+  development build instead of Expo Go once there are native modules; restart Metro with `--clear`
+  when it misses edits.
+- **`auth-security`** — Next.js BFF for an admin app; Origin guard and host-only cookies.
+- **`cloudflare-setup`** — Bot Fight Mode blocks datacenter traffic (CI, serverless) with no
+  per-path exception on Free: health checks and server-to-server calls go to the origin, protected
+  by an origin-auth header. `github-actions-monorepo` notes it on health checks.
+- **`domain-events/outbox-supabase`** — broken link fixed.
+
 ## v1.0.3
 
 ### `dev-patterns`

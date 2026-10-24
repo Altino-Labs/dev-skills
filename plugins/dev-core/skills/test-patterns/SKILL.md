@@ -168,6 +168,24 @@ And across the whole response tree: the project's **field naming convention** (e
 snake_case on the wire — `dev-core:api-contracts`) — a mismatch is the classic contract bug. Details:
 [contract-event-tests.md](contract-event-tests.md).
 
+## Security boundaries — assert them, not just the happy path
+
+- **Mocks that ignore their arguments still assert the security filter.** A chainable
+  query-builder mock (or any auto-mock returning canned rows regardless of input) proves error
+  handling and mapping, **not** that the query was scoped — the test passes even if the
+  `tenant_id` / `user_id` / owner filter is missing. For every repository method that scopes by
+  tenant, owner or user, assert the filter call and its value (the recorded calls of the
+  builder), or cover the method with an integration test against a real database.
+- **Database privileges are tested against a real database in CI when migrations change.**
+  Row-level policies, grants/revokes on tables and functions, and privileged
+  (security-definer) functions can't be unit-tested. A dedicated suite starts a local
+  database, applies every migration, and asserts as each role: an anonymous / authenticated
+  client can't read or write what it shouldn't, can't execute privileged functions, and a
+  privileged function rejects a caller who isn't a member. Run it on every PR that touches the
+  migrations folder (path filter) and locally before pushing a migration. Details:
+  [repository-integration-tests.md](repository-integration-tests.md) → "Database privilege
+  tests".
+
 ## Detailed guides
 
 Read the file that matches the task before writing the test:
@@ -180,5 +198,6 @@ Read the file that matches the task before writing the test:
   (single, list, mutation, error, 401, naming convention) and the event-bus fakes
   (`StrictEventBus`, `CapturingEventBus`).
 - [repository-integration-tests.md](repository-integration-tests.md) — when to write them,
-  round-trip and LSP-contract tests, and test-data isolation (track created IDs; never
-  delete-all on a shared database).
+  round-trip and LSP-contract tests, database privilege tests (policies, grants, privileged
+  functions — per role, in CI when migrations change), and test-data isolation (track created
+  IDs; never delete-all on a shared database).

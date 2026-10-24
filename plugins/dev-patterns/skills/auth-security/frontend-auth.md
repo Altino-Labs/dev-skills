@@ -184,3 +184,29 @@ Server-side alternative (BFF) when the web app must meet the `httpOnly` default:
   touches tokens and calls the server, which forwards the access token to the API.
 - Add CSRF protection for cookie-authenticated state-changing requests
   (`dev-core:auth-security`).
+
+## Next.js BFF for an admin web app
+
+The concept and its rules: `dev-core:auth-security` → "Backend-for-frontend (BFF) for an admin
+web app". In Next.js (App Router):
+
+- **Auth route handlers** — `app/api/auth/{login,logout,session,mfa/*}/route.ts`, using
+  `createServerClient` from `@supabase/ssr`. `session` returns `{ user: { email }, is_admin }`,
+  never a token. The browser calls them through a small `auth-api.ts`; no Supabase client is
+  ever created in browser code.
+- **One cookie helper** — every session cookie write (route handlers **and** the middleware's
+  token refresh) goes through one function that sets `httpOnly`, `SameSite=Strict`,
+  `path: '/'` and `Secure` in production, so no call site forgets a flag.
+- **API proxy** — `app/api/proxy/[...path]/route.ts` forwards to a **server-only** env var
+  (e.g. `API_ORIGIN_URL`, no `NEXT_PUBLIC_` prefix). It reads the session, sets
+  `Authorization: Bearer`, copies only `content-type`, `accept` and `idempotency-key` from the
+  incoming request, never forwards cookies, and answers 400 to any `.` / `..` segment (check
+  the decoded segments). The client's API base URL is `'/api/proxy'`.
+- **Same-origin check** — mutating `/api/*` handlers require `Origin` to equal the request's own
+  origin (missing → 403).
+- **Middleware** never redirects `/api/*` — each route answers JSON (401/403) and checks its
+  own session; page routes redirect to `/login`.
+- **CSP** `connect-src 'self'` plus the error tracker's ingest host (`next.config` headers).
+- When the API sits behind Cloudflare with Bot Fight Mode, the proxy (a Vercel/serverless
+  function = datacenter traffic) must call the API's **origin** URL with an origin-auth header,
+  not the proxied hostname — `dev-patterns:cloudflare-setup` → "Bot Fight Mode blocks datacenter traffic".

@@ -15,6 +15,12 @@
 | **Stub** | Returns canned answers and records calls (`StubExchangeRateProvider`) | An external dependency must answer a fixed value or fail |
 | **Auto-mock** | The runner's/mock library's generated interface double | Only "was it called with X" matters; the stack plugin shows the helper |
 
+An auto-mock or chainable query-builder mock that returns canned rows **whatever the
+arguments** can't tell a scoped query from an unscoped one. Wherever the code under test scopes
+by tenant, owner or user, assert the recorded call that applies that filter and its value
+(`expect(builder.eq).toHaveBeenCalledWith('tenant_id', tenantId)`) — otherwise a missing
+filter, a data leak across tenants, passes every test.
+
 Never double the class under test. Every fake honors the **same contract** as the production
 implementation (LSP) — null vs throw, filters, ordering, version checks — otherwise the unit
 tests pass against behavior production does not have.

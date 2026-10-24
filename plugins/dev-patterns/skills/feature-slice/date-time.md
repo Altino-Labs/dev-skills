@@ -199,7 +199,18 @@ body: { purchased_at: new Date().toLocaleDateString('sv-SE', { timeZone: tz }) }
 
 **How to distinguish:** check the migration — `date NOT NULL` → sv-SE pattern; `timestamptz` → `toISOString()`.
 
-**Never hardcode the timezone in the frontend** — a hard-coded zone is a backend fallback only; always send the user's stored IANA `tz`.
+**Never hardcode the timezone in the frontend** — a hard-coded zone is a backend fallback for old client builds only; always use a stored IANA zone (the subject's for a subject's dates, the user's otherwise).
+
+---
+
+## Which time zone — subject vs viewer
+
+Rules and reasoning: `dev-core:date-time`.
+
+- **Subject zone** (a patient, a store, a team — whoever owns the schedule): its "today", routine times and form inputs. Everyone sees the same day. Hook: `useSubjectTimezone(subjectId)`.
+- **Viewer zone** (the user's profile): their own screens, plus an extra "in your zone: …" line when it differs at that instant — per instant, never a fixed offset, never "tomorrow"/"yesterday".
+- **Transport:** the shared HTTP client sends the user's zone as `X-Timezone: <IANA name>` on every call; subject routes use the subject's stored zone server-side (`nestjs-fastify` § "Filtering `timestamptz` by local calendar date").
+- **Tests pin a zone west of UTC** (`TZ=America/Sao_Paulo` in the test script): date-only values parsed as UTC midnight shift a day only there, never on a UTC CI runner. Functions reading "now" take an explicit zone + fake timers.
 
 ---
 

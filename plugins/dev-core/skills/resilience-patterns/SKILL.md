@@ -2,9 +2,11 @@
 name: resilience-patterns
 description: >
   Reusable resilience patterns: circuit breaker, retry with backoff,
-  timeouts, graceful degradation, and policy by external service type.
+  timeouts, graceful degradation, policy by external service type, and scheduled jobs
+  (in-process cron vs an OIDC-authenticated external tick with leases and dead-man alerts).
   Invoke automatically when integrating external services (email, push, third-party APIs),
-  when implementing calls that can fail temporarily, or when configuring timeouts.
+  when implementing calls that can fail temporarily, when configuring timeouts, or when
+  scheduling recurring jobs.
 ---
 
 # Resilience Patterns
@@ -194,6 +196,44 @@ leave it implicit):
   "invite accepted" push) without checking.
 - **A timeout longer than the table's target** (e.g. 20s instead of 5s for push) is
   acceptable as a deliberate decision — mark it as such so nobody "fixes" it as a typo.
+
+---
+
+## Scheduled jobs — in-process cron vs an external tick
+
+An in-process scheduler (a cron library inside the API) only fires while an instance is
+running, and fires once **per instance**. On a host that scales to zero (Cloud Run, serverless
+functions, Fly machines that stop) jobs silently stop; with several replicas they run N times.
+There, drive the jobs from an **external tick** instead:
+
+- **One tick endpoint** (e.g. `POST /internal/cron/tick`), called every minute by the platform
+  scheduler (Cloud Scheduler, EventBridge Scheduler, a platform cron). It asks "which jobs are
+  due this minute?" and runs them, isolated per job (one failing job doesn't stop the others).
+  Not one public endpoint per job.
+- **Authenticate the caller with the platform's OIDC identity token**, not a shared secret:
+  verify signature, `aud` (the service URL) and the caller's service-account identity (a
+  dedicated account with no other roles). Nothing to rotate or leak. Exempt only this exact
+  route from other edge checks, since it has its own authentication.
+- **One schedule registry** — a single table in code of job → cron expression, time zone
+  (when a daily job must run at a local hour) and stale-lease threshold. The in-process
+  decorators (if kept) and the tick both read it, so they can't drift; a typed map makes the
+  compiler reject a job without an entry.
+- **A run log with leases:** each run inserts a `RUNNING` row (the lease) and closes it with
+  `SUCCESS`/`ERROR` and a result. A second start while a fresh lease exists is skipped (an
+  expected overlap, not an alert); a lease older than the job's threshold (scaled to its
+  cadence — minutes for an every-minute job, not a fixed half hour) is **taken over as
+  orphaned** (the instance died mid-run). Prune old rows with a job of its own.
+- **Alert on both failure modes:** a job failed (a distinctive log line or metric → alert,
+  rate-limited), **and** no tick arrived for N minutes (a dead-man switch on the tick's own
+  log/metric) — a scheduler that stopped calling produces no errors at all. After each deploy,
+  wait for the new revision to log a tick before calling the deploy healthy.
+- **Never both firing at once.** One mode switch (e.g. `CRON_MODE=in-process | external`)
+  turns the in-process scheduler off when the external tick is on. The rollback runbook flips
+  the switch **and** pauses the external scheduler job in the same step; otherwise a rollback
+  double-runs every job (the leases reduce, but don't remove, the damage for non-idempotent
+  jobs).
+- Validate the mode's config at startup (`external` without the expected audience/caller →
+  refuse to start), and keep a manual "run now" path that records its own run.
 
 
 ---

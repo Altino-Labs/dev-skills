@@ -51,6 +51,8 @@ All in [frontend-auth.md](frontend-auth.md):
 - Route protection with Expo Router (`<Redirect>`) and the Next.js `middleware.ts`.
 - `@supabase/ssr`: `createBrowserClient` keeps tokens in JS-readable (non-`httpOnly`) cookies —
   the caveat and the server-side (BFF) alternative.
+- The Next.js BFF for an admin web app: auth route handlers, one cookie helper, the API proxy
+  route (header allow-list, `.`/`..` refused), same-origin check, `connect-src 'self'`.
 
 ## Required environment variables
 

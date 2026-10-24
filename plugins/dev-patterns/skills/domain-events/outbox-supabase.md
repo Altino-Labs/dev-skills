@@ -282,7 +282,8 @@ export class OutboxRelayProcessor {
   ) {}
 
   // Requires: pnpm add @nestjs/schedule && ScheduleModule.forRoot() in AppModule.
-  // → Setup: see skill `notifications-cron` — section "Scheduled jobs".
+  // → Setup: see skill `jobs-queues` — section "Scheduled jobs" (with an external tick, the
+  //   tick runs the relay; a 30-second cadence then needs its own trigger or a 1-minute one).
   // '*/30 * * * * *' is a 6-field cron (with seconds) — only @nestjs/schedule supports it;
   // standard cron tools treat the first field as minutes and would fire every 30 minutes.
   // Default interval: every 30 seconds — tune based on event volume.

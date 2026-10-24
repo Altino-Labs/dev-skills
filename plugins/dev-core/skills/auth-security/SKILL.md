@@ -6,7 +6,8 @@ description: >
   role-based permission matrix, roles from the database vs roles/scopes in token claims (a
   trade-off), endpoint protection (deny by default, server-side authorization always — at the
   edge or as policy checks in the application layer — client-side guards are UX only), CSRF
-  protection for cookie-based auth, secure token storage on clients
+  protection for cookie-based auth (tokens or Origin verification; web vs native clients),
+  a backend-for-frontend for an admin web app, secure token storage on clients
   (Keychain/Keystore on native, httpOnly cookies on web, and the explicit lower-security web
   fallback), an external auth provider behind an anti-corruption layer, rate limiting on auth
   endpoints, the absolute auth security rules and the anti-patterns. Invoke automatically when
@@ -218,16 +219,51 @@ Rules for cookie-authenticated requests:
 
 - Cookies are `HttpOnly`, `Secure`, and `SameSite=Strict` (or `Lax` when cross-site top-level
   navigation must keep the session). `SameSite` is the first layer, not the only one.
-- **Every state-changing request (POST/PUT/PATCH/DELETE) carries a CSRF token** — synchronizer
-  token (stored in the server session, the framework default in Django/Rails/Spring Security/
-  ASP.NET antiforgery) or double-submit (a random value in a non-httpOnly cookie echoed in a
-  header and compared server-side). Keep the framework's built-in protection on; never disable
-  it to "make the API work".
+- **Every cookie-authenticated state-changing request (POST/PUT/PATCH/DELETE) is verified**
+  with one of the OWASP-accepted defenses:
+  - a **CSRF token** — synchronizer token (stored in the server session, the framework default
+    in Django/Rails/Spring Security/ASP.NET antiforgery) or double-submit (a random value in a
+    non-httpOnly cookie echoed in a header and compared server-side); or
+  - **Origin verification** — the `Origin` header (fallback: the origin of `Referer`) must be
+    in the exact allow-list of the app's own web origins (the same list CORS uses), otherwise
+    `403`. Apply it when the request carries an auth cookie and no `Authorization` header;
+    refuse a missing `Origin`/`Referer` on those requests. It also covers what `SameSite=Lax`
+    doesn't: a compromised or user-controlled sibling subdomain is same-site.
+  Keep the framework's built-in protection on; never disable it to "make the API work".
+- **Cookies are host-only** — no `Domain` attribute, so they reach only the API host, not
+  every subdomain.
 - GET/HEAD never change state.
 
+**One API for web and native clients.** A browser always sends `Origin` on cross-origin and
+unsafe requests; native HTTP clients don't. The API can tell them apart by that header: web
+clients get the tokens **only** as `httpOnly` cookies (the login/refresh response body
+carries the user, never the tokens — script must not be able to read them), while native
+clients keep getting tokens in the body for secure storage. The API accepts `Authorization:
+Bearer` first and falls back to the cookie.
+
 APIs authenticated **only** by a bearer token in the `Authorization` header don't need CSRF
-tokens — the browser never attaches that header on its own. The moment any endpoint accepts a
-cookie as credential, it needs the protection above.
+protection — the browser never attaches that header on its own. The moment any endpoint
+accepts a cookie as credential, it needs the protection above.
+
+### Backend-for-frontend (BFF) for an admin web app
+
+For a high-privilege web app (an admin panel), the strongest browser posture is **no auth
+code in the browser at all**:
+
+- The browser talks only to the web app's own server. Login, logout, MFA and session refresh
+  are server routes; the session lives in `httpOnly`, `Secure`, `SameSite=Strict` cookies
+  scoped to that origin. A "session" endpoint returns only what the UI needs (e.g. email,
+  is-admin), never a token.
+- API calls go through a **server-side proxy route** that reads the session and sets
+  `Authorization: Bearer` itself. It forwards **only allow-listed request headers** (e.g.
+  `content-type`, `accept`, an idempotency key — never the browser's cookies), and refuses
+  path segments `.` / `..` (and their encoded forms) so a crafted path can't reach other API
+  routes. The API's own authorization stays the boundary.
+- Mutating server routes check `Origin` equals the app's own origin (refuse a missing one).
+- **CSP `connect-src 'self'`** (plus the error tracker's ingest host): any new
+  browser → external call needs a proxy route, not a CSP exception.
+
+Framework mechanics (e.g. Next.js route handlers): the stack plugin.
 
 ---
 
@@ -286,7 +322,8 @@ Keep the named limit profiles in one shared place so a policy change is a one-li
 - Logout: always revoke the refresh token on the backend — not just clear the client
 - Role: from the database on each request, or from verified token claims **only** with
   short-lived access tokens (see "Where roles come from")
-- Cookie-authenticated state-changing requests: `SameSite` cookies + CSRF token
+- Cookie-authenticated state-changing requests: host-only `SameSite` cookies + a CSRF token
+  or strict `Origin` verification; tokens never in a web client's response body
 - Password: never log, never serialize, never include in error responses
   (`dev-core:logging-observability` → never log)
 

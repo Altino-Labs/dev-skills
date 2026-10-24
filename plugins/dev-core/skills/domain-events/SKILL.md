@@ -5,7 +5,8 @@ description: >
   through events; cross-module reads go through the other module's public query API),
   event structure and naming, the event bus port and subscriber interface, publishing from a
   use case after persisting, idempotent subscribers, graceful degradation (the bus isolates
-  subscriber failures), the project event catalog (names as constants, additive payload
+  subscriber failures), time- or level-triggered notifications as scheduled scans of current
+  state (not subscribers), the project event catalog (names as constants, additive payload
   evolution), anti-patterns, testing with fakes, and durable delivery — when to use an Outbox
   vs an in-memory bus, the Outbox pattern and the Saga pattern with compensation. Invoke
   automatically when creating domain events, subscribers, publishing events in use cases, or
@@ -90,6 +91,29 @@ fixed limits:
   no target module depends back on it.
 - Record each orchestrator module and the use cases it is allowed to call in the project's
   architecture doc, so it doesn't become a back door into every module.
+
+### Time- or level-triggered notifications are scheduled scans, not subscribers
+
+Some side effects are not caused by *an action* but by *a state being true at some time*: a
+reminder ("appointment in 1 hour", "dose due now"), an expiry, a level crossing ("stock low",
+"quota at 90%"). Implement those as a **scheduled job that scans current state** and acts on
+what matches — never as a subscriber of a domain event.
+
+- A subscriber fires only on the write paths that publish the event. A level can change through
+  paths that never publish it — a nightly automatic decrement, a bulk import, a backfill, an
+  admin fix, a write path added next year — and the alert is silently skipped. A scan of current
+  state covers every write path, present or future.
+- Time-triggered work has no write at all at the moment it is due; an event at creation time
+  would need its own delayed delivery, rescheduled on every edit and cancelled on delete.
+- The scan is idempotent: it records what it already sent (mark-sent only **after** a
+  successful send) so the next tick retries failures and never sends twice
+  (`dev-core:resilience-patterns` → "A cron can replace immediate retry"). How the scan is
+  triggered on hosts that scale to zero: `dev-core:resilience-patterns` → "Scheduled jobs".
+- **Action-triggered** side effects ("invitation accepted", "order shipped", "emergency
+  reported") still go through an event + subscriber, as above. A scan is not a substitute for
+  them, and a direct call from the use case is not either.
+- Record the decision (which notifications are scans, which are subscribers) in the project's
+  ADRs; an event published with no subscriber yet is fine as a placeholder.
 
 ---
 

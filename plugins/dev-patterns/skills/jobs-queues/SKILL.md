@@ -1,10 +1,11 @@
 ---
 name: jobs-queues
 description: >
-  Async jobs and queue patterns with BullMQ + Upstash Redis.
-  Invoke automatically when implementing tasks that must not block the HTTP response:
-  PDF generation, email sending, report processing, exports, or any
-  long-running operation triggered by an event.
+  Async jobs and queue patterns with BullMQ + Upstash Redis, and scheduled jobs with
+  @nestjs/schedule (schedule registry, in-process cron disabled when an external tick drives
+  the jobs). Invoke automatically when implementing tasks that must not block the HTTP
+  response: PDF generation, email sending, report processing, exports, or any
+  long-running operation triggered by an event — or when adding a scheduled job.
 ---
 
 # Jobs & Queues
@@ -13,7 +14,7 @@ description: >
 
 | Situation | Mechanism |
 |---|---|
-| Periodic task (check overdue items at 00:00) | Cron (`notifications-cron`) |
+| Periodic task (check overdue items at 00:00) | Cron — see "Scheduled jobs" below (`notifications-cron` for reminders) |
 | Event-triggered task, takes >500ms (generate PDF) | **Job queue** |
 | Fast event-triggered task (<500ms) | Direct Event Bus |
 | Task that can fail and needs retry | **Job queue** |
@@ -160,6 +161,59 @@ export const QUEUE_CONFIGS = {
   },
 };
 ```
+
+---
+
+## Scheduled jobs — `@nestjs/schedule` and the external tick
+
+The concept (why an external tick on scale-to-zero hosts, OIDC instead of a shared secret,
+run-log leases, missing-tick alert, never both modes at once): `dev-core:resilience-patterns`
+→ "Scheduled jobs". The NestJS side:
+
+```typescript
+// shared/scheduling/cron-schedules.ts — the ONLY place a schedule is written
+export type CronJobName = 'send-reminders' | 'expire-reports' | 'prune-cron-runs';
+
+export interface CronSchedule {
+  readonly expression: string;        // 5-field cron
+  readonly timeZone?: string;         // IANA; absent = server zone (UTC on most hosts)
+  readonly staleAfterMinutes: number; // a RUNNING lease older than this is taken over
+}
+
+export const CRON_SCHEDULES: Readonly<Record<CronJobName, CronSchedule>> = {
+  'send-reminders':  { expression: '*/5 * * * *', staleAfterMinutes: 10 },
+  'expire-reports':  { expression: '0 3 * * *', timeZone: 'Europe/Lisbon', staleAfterMinutes: 30 },
+  'prune-cron-runs': { expression: '0 4 * * *', timeZone: 'Europe/Lisbon', staleAfterMinutes: 30 },
+};
+
+// scheduler/cron-config.ts — read before DI exists, so the module definition can use it
+export const inProcessCronEnabled = (env = process.env) => env.CRON_MODE?.trim() !== 'external';
+
+// scheduler/scheduler.module.ts — in 'external' mode no @Cron fires in this process
+@Module({
+  imports: [ScheduleModule.forRoot({ cronJobs: inProcessCronEnabled() })],
+  controllers: [CronTickController],
+  providers: [/* jobs, RunDueCronJobsUseCase, CronOidcGuard, ... */],
+})
+export class SchedulerModule {}
+
+// each job keeps its decorator, fed by the registry (fires only in 'in-process' mode)
+@Cron(CRON_SCHEDULES['send-reminders'].expression, { name: 'send-reminders' })
+async onCron(): Promise<void> { await this.run(); }   // run() takes the lease, never throws
+```
+
+- `ScheduleModule.forRoot({ cronJobs: false })` keeps the `@Cron` decorators from starting
+  (check the option exists in your `@nestjs/schedule` version); the tick then calls the same
+  `run()` methods for the jobs due that minute (evaluate each expression in its `timeZone`
+  against the tick's time).
+- The tick controller is `@Public()` for the user `JwtAuthGuard` and protected by its own guard
+  that verifies the scheduler's OIDC token — for Google Cloud Scheduler, `google-auth-library`
+  `verifyIdToken({ idToken, audience })`, then require `email` = the invoker service account
+  and `email_verified`.
+- Validate the env at startup: `CRON_MODE` other than `in-process`/`external`, or `external`
+  without the audience and invoker account → throw, so a misconfigured revision never serves.
+- Wrap each job's body in one shared helper (take lease → run → record `SUCCESS`/`ERROR` →
+  return `ran | skipped_locked | failed`) instead of copying the try/catch into every job.
 
 ---
 

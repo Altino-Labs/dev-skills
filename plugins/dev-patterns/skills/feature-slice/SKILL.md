@@ -115,6 +115,10 @@ Every app has a single shared HTTP client module (e.g. `src/lib/api-client.ts`).
 
 3. **Network error** (`fetch` fails before getting a response) → throws `TypeError`. Detect it with `e instanceof TypeError`, not with `!e.statusCode`.
 
+4. **`X-Timezone` on every call** — the IANA zone the user declared in their profile (read from
+   the auth store outside React), set here once, never per endpoint. See "Which time zone —
+   subject vs viewer" below and `dev-patterns:nestjs-fastify`.
+
 ```typescript
 // src/lib/api-client.ts
 export type ApiError = Error & { statusCode: number; code: string; details?: unknown };
@@ -448,10 +452,30 @@ http.createServer((req, res) => {
 
 **Rule:** check your pnpm version before picking a proxy strategy. `pnpm --version` → v11+ = transparent; < v11 = rewriting.
 
+### Development build, not Expo Go, once there are native modules
+
+Expo Go only contains the native modules bundled with it. As soon as the app adds one it
+doesn't ship (or a config plugin, or a native setting such as the dev menu's floating
+button), switch the daily flow to a **development build** (`expo-dev-client`): build it once
+per native change (`npx expo run:ios`, or `eas build --profile development` — `expo-eas`),
+install it on the simulator/device, then start Metro with `--dev-client`. Rebuild only when
+native code or config changes; JS changes still hot-reload. The commands below show `--ios`
+for the Expo Go case; with a development build use `npx expo start --dev-client --port 8082
+--clear` and open the installed app (e2e runners use that same build).
+
+### Metro may miss edits — restart with `--clear` before a manual check
+
+On some machines Metro's file watcher silently misses edits (the app keeps running the old
+code, with no error). Before **every** manual validation on a simulator or device: stop
+Metro, restart it with `--clear`, and confirm in its log that a **full bundle** was built
+(e.g. "Bundled … (N modules)" with the full module count, not a small incremental one).
+Otherwise you are testing yesterday's code. An e2e failure with no related code change: check
+Metro is alive (`curl localhost:<port>/status`) before debugging the test.
+
 ### iOS Simulator alongside web — single Metro rule
 
 **NEVER run two separate Metro instances** (one `--web`, one `--ios` on different ports).
-When Expo Go loses connection and reconnects, it can pick up the wrong Metro and show:
+When the app (Expo Go or a development build) loses connection and reconnects, it can pick up the wrong Metro and show:
 `[runtime not ready]: React Native version mismatch — JS: <project RN>, Native: <other RN>`
 
 **Correct pattern — one Metro serving both:**
@@ -482,11 +506,14 @@ pnpm install
 cd apps/mobile && npx expo install --fix
 
 # 4. Start (web + iOS) — ALWAYS from apps/mobile, NEVER from monorepo root
-#    Use --ios so Expo CLI installs the correct Expo Go SDK version (avoids version mismatch on Cmd+R)
+#    Expo Go (no custom native modules yet): --ios so Expo CLI installs the matching Expo Go SDK
 cd apps/mobile && EXPO_ROUTER_APP_ROOT=app npx expo start --ios --port 8082 --clear
+#    Development build (any custom native module): build once, then start with --dev-client
+#    npx expo run:ios   &&   EXPO_ROUTER_APP_ROOT=app npx expo start --dev-client --port 8082 --clear
 node web-proxy.js 8082 8081   # web at http://localhost:8081
 
-# --clear is REQUIRED after any change to babel.config.js or metro.config.js
+# --clear is REQUIRED after any change to babel.config.js or metro.config.js,
+# and before every manual check (Metro may miss edits — confirm a full bundle in its log)
 # Without --clear, Metro reuses corrupted cache
 ```
 
@@ -713,8 +740,8 @@ async function getDailyItems(resourceId: string, tz: string) {
 that the backend accepts directly as a date string.
 
 **When to apply:** any query for "today's schedule", "today's events", "daily summary", or any
-endpoint that accepts `?date=`. Verify that the hook receives `tz` (the user's IANA timezone)
-as a parameter.
+endpoint that accepts `?date=`. Verify that the hook receives `tz` as a parameter — the
+**subject's** zone when the screen shows a subject's day (see below), otherwise the user's.
 
 ---
 
@@ -748,8 +775,9 @@ rows to a real UTC time — not just cast to midnight UTC. See `migrations` § "
 body: { date_field: new Date().toISOString() }  // ✅ always UTC
 ```
 
-**Also applies to backend filters:** pass `tz` as a query param so the backend can compute
-correct UTC bounds. See `nestjs-fastify` § "Filtering `timestamptz` by local calendar date — `utcRangeForLocalDate`".
+**Also applies to backend filters:** the shared HTTP client sends the user's zone in the
+`X-Timezone` header on every call (subject routes use the subject's stored zone server-side),
+so the backend computes correct UTC bounds. See `nestjs-fastify` § "Filtering `timestamptz` by local calendar date — `utcRangeForLocalDate`".
 
 ---
 
@@ -776,8 +804,30 @@ body: { purchased_at: new Date().toLocaleDateString('sv-SE', { timeZone: tz }) }
 **How to distinguish:** check the migration — `date NOT NULL` → sv-SE pattern; `timestamptz` → `toISOString()`.
 
 **Never hardcode the timezone in the frontend.** A hard-coded default zone is acceptable only as
-a backend fallback. Always read `tz` from the user's stored IANA timezone (e.g. a
-`useUserTimezone()` selector on the Zustand auth store) and send it explicitly.
+a backend fallback for old client builds. Always read `tz` from a stored IANA zone — the
+subject's (e.g. `useSubjectTimezone(id)`) for a subject's dates, the user's (e.g. a
+`useUserTimezone()` selector on the Zustand auth store) otherwise.
+
+---
+
+## Which time zone — subject vs viewer
+
+The rules and the reasoning: `dev-core:date-time`. In the frontend:
+
+- **Subject zone** — when a record belongs to someone or something with its own schedule (a
+  patient, a store, a team), its "today", its routine times and its form inputs are in **that
+  subject's** stored zone, so everyone looking at it sees the same day and the same 20:00.
+  Expose it with a hook next to the user's (`useSubjectTimezone(subjectId)`), filled from the
+  API response.
+- **Viewer zone** — the user's profile zone: their own screens (profile, lists of subjects) and
+  the `X-Timezone` header. When it differs from the subject's at that instant, show an extra
+  line in it ("in your zone: Sat 18/10, 00:00") — computed per instant, never a fixed offset,
+  never "tomorrow"/"yesterday" (ambiguous across the two zones).
+- Forms that take a time in the subject's zone say so when the viewer is elsewhere.
+- **Tests pin a zone west of UTC** (e.g. `TZ=America/Sao_Paulo` in the test script of the
+  package with date helpers). A date-only value parsed as UTC midnight shifts a day only in
+  negative-offset zones, so on a UTC CI runner that bug class can't fail. Functions that read
+  "now" take an explicit zone and run under fake timers.
 
 ---
 

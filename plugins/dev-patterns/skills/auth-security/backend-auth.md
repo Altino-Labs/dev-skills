@@ -186,7 +186,7 @@ async execute(refreshToken: string): Promise<RefreshOutput> {
 }
 ```
 
-Refresh tokens are **opaque** (32 random bytes — `randomBytes(32).toString('base64url')` from `node:crypto`; a UUID v4 has only 122 random bits), stored in the `refresh_tokens` table **as a hash** (`token_hash`, unique index) with `expiresAt` and `revokedAt`. Native clients get the token in the response body; web clients only as an `httpOnly`, `Secure`, `SameSite` cookie set by the server (`dev-core:auth-security`). Never store refresh tokens in localStorage.
+Refresh tokens are **opaque** (32 random bytes — `randomBytes(32).toString('base64url')` from `node:crypto`; a UUID v4 has only 122 random bits), stored in the `refresh_tokens` table **as a hash** (`token_hash`, unique index) with `expiresAt` and `revokedAt`. Native clients get the token in the response body; web clients only as an `httpOnly`, `Secure`, `SameSite`, host-only (no `Domain`) cookie set by the server, with the tokens stripped from the response body. Tell them apart by the `Origin` header (browsers send it, native clients don't); in Fastify, `reply.setCookie` from `@fastify/cookie`. Cookie-authenticated mutations need a global guard that checks `Origin` (fallback `Referer`) against the CORS allow-list when no `Authorization` header is present (`dev-core:auth-security` → CSRF). Never store refresh tokens in localStorage.
 
 ---
 
